@@ -5,6 +5,7 @@ cache/
 __pycache__/
 re_data/
 
+.DS_Store
 test_data.py
 test.sh
 train.sh
