@@ -1,0 +1,12 @@
+1.
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib25_none
+{"correct_num": 2012, "instance_num": 3325, "accuracy": 50.61, "total_accuracy": 60.51}
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib25_t1
+{"correct_num": 2640, "instance_num": 3325, "accuracy": 75.24, "total_accuracy": 79.4,
+"correct_num_expert": 2689, "instance_num_expert": 3325, "accuracy_expert": 76.75, "total_accuracy_expert": 80.87}
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib25_t2
+{"correct_num": 2451, "instance_num": 3325, "accuracy": 67.64, "total_accuracy": 73.71,
+"correct_num_expert": 2749, "instance_num_expert": 3325, "accuracy_expert": 79.55, "total_accuracy_expert": 82.68}
+
+2.
+
