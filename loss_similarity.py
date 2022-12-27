@@ -15,9 +15,10 @@ class LossSimilarity:
         self.negative_label = 0 if self.sim_type != 'cosine' else -1
         self.negative_logit = float(config['train']['null_expert_logit'])
         self.embed_size = config['vocab_size'] if self.sim_type == 'divergence' else config['hidden_size']
-        self.part_bound = int(config['dataset']['total_parts'][1:])
+        self.curr_bound = int(config['dataset']['special_part'][1:])
         self.loss_func, self.extra_module = self.get_similarity_by_config()
         self.use_linear = config['dataset']['method_type'] == 'linear'
+        self.continual_method = config['train']['continual_method']
         self.split_to_model_cache = {}
         self.prompt_token_map_cache = {}
         self.continual_logit_cache = {}
@@ -84,6 +85,8 @@ class LossSimilarity:
     def forward_similarity_train(self, model, tokenizer, batch,
                                  type_embeds=None, type_counter=None,
                                  extra_module_info=None, tag_to_loss_weight=None):
+        if extra_module_info is None:
+            extra_module_info = []
         train_target_pos = self.config['train']['train_target_pos']  # ALERT: need to be confirmed
         loss_vec = None
         if self.config['task'] in ['contrastive', 'continual']:
@@ -127,14 +130,14 @@ class LossSimilarity:
                 loss_vec = [loss_vec[i] + t_loss_vec[i] for i in range(len(loss_vec))]
         else:
             raise NotImplementedError('invalid task name: ' + self.config['task'])
-        if self.config['train']['continual_method'] == 'ewc' and not self.config['generate_grad']:
-            assert len(extra_module_info) == 0 and len(self.split_to_model_cache) == 0
+        if self.continual_method == 'ewc' and not self.config['generate_grad']:
+            assert len(extra_module_info) == 0
             ewc_loss = self.calculate_ewc_loss(model)
             loss += ewc_loss
         return loss, loss_vec
 
     def calculate_ewc_loss(self, model):
-        assert self.config['train']['continual_method'] == 'ewc'
+        assert self.continual_method == 'ewc'
         p_lambda = self.config['train']['ewc_lambda']
         if 'grad_means' not in self.split_to_model_cache:
             assert 'grad_fishers' not in self.split_to_model_cache
@@ -162,20 +165,20 @@ class LossSimilarity:
         return ewc_loss
 
     def calculate_lwf_loss(self, sample_keys, whole_logits):
-        assert self.config['train']['continual_method'] == 'lwf'
+        assert self.continual_method == 'lwf'
+        past_splits = [f'p{idx}' for idx in range(1, self.curr_bound)]  # only consider old tasks
+        last_target_tokens, _ = self.generate_continual_token_map(past_splits, strict=True)
         if 'lwf_logit' not in self.split_to_model_cache:
             grad_checkpoints = [s for s in self.config['grad_checkpoint'].split(',') if s]
             assert len(grad_checkpoints) == 1
             print(f'loading lwf logit from {grad_checkpoints[0]} ......')
             lwf_logit = torch.load(grad_checkpoints[0], map_location='cpu')
-            lwf_logit = {key: torch.exp(val.to(self.config['device'])) for key, val in lwf_logit.items()}
-            assert all(torch.sum(val) - 1 < 1e-6 for val in lwf_logit.values())
+            lwf_logit = {key: torch.softmax(val.to(self.config['device'])[last_target_tokens], dim=0)
+                         for key, val in lwf_logit.items()}
             self.split_to_model_cache['lwf_logit'] = lwf_logit
         lwf_logit = self.split_to_model_cache['lwf_logit']
         last_lwf_logit = torch.stack([lwf_logit[sample_key] for sample_key in sample_keys])
 
-        total_splits = [f'p{idx}' for idx in range(1, self.part_bound + 1)]
-        last_target_tokens, last_token_to_tid = self.generate_continual_token_map(total_splits)
         cur_lwf_logit = whole_logits[:, last_target_tokens]
         lwf_loss = (- last_lwf_logit * torch.log_softmax(cur_lwf_logit, dim=1)).sum()
         lwf_loss *= self.config['train']['ewc_lambda']
@@ -204,10 +207,20 @@ class LossSimilarity:
             split_model.eval()
             self.split_to_model_cache[split] = split_model
 
-    @staticmethod
-    def generate_continual_token_map(splits: list):
-        target_tokens, token_to_tid = [], {}
+    def generate_continual_token_map(self, splits: list, strict=False):
+        """
+        ALERT: for self.continual_method not in ['our', 'lwf'], the result is different from
+        simply changing the splits to ['p1'-'p10']!
+        """
+        if not strict and self.continual_method not in ['our', 'lwf']:
+            label_num = self.config['label_num']
+            target_tokens = list(range(label_num))
+            token_to_tid = {idx: tag for idx, tag in enumerate(target_tokens)}
+            return target_tokens, token_to_tid
+        if not strict and self.continual_method == 'lwf':
+            splits = [f'p{sid+1}' for sid in range(self.curr_bound)]
         continual_split_to_targets = GLOBAL['continual_split_to_tags']
+        target_tokens, token_to_tid = [], {}
         for split in splits:
             cur_targets = continual_split_to_targets[split]
             for wid in cur_targets:
@@ -216,18 +229,12 @@ class LossSimilarity:
         return target_tokens, token_to_tid
 
     def get_current_splits(self, extra_module_info, train_expert_selector):
-        if self.config['generate_logit'] or self.config['train']['continual_method'] == 'lwf':
-            # ALERT: enhanced LWF!
-            assert len(self.config['dataset']['extra_special_part']) == len(extra_module_info) == 0
-            all_splits = [f'p{idx}' for idx in range(1, self.part_bound + 1)]
-            return all_splits, all_splits
         if train_expert_selector:
             assert self.config['train']['train_expert_selector'] and \
                    self.config['train']['verbalizer_strategy'] == 'mean'
-            cur_split_id = int(self.config['dataset']['special_part'][1:])
-            expert_selector_groups = [f'p{idx}' for idx in range(1, cur_split_id + 1)]
+            expert_selector_groups = [f'p{idx}' for idx in range(1, self.curr_bound + 1)]
             return expert_selector_groups, expert_selector_groups
-        current_splits = [self.config['dataset']['special_part']]
+        current_splits = [f'p{self.curr_bound}']
         extra_special_part = [s for s in self.config['dataset']['extra_special_part'].split(',') if s]
         for split in extra_special_part:
             if split not in current_splits:
@@ -238,7 +245,7 @@ class LossSimilarity:
         current_splits.sort()
         total_split_set = past_split_set + current_splits
         if self.config['is_test']:  # ALERT: for all is_test
-            for idx in range(1, self.part_bound + 1):
+            for idx in range(1, self.curr_bound + 1):
                 if f'p{idx}' not in total_split_set:
                     total_split_set.append(f'p{idx}')
         total_split_set.sort()
@@ -256,12 +263,11 @@ class LossSimilarity:
 
     @torch.no_grad()
     def select_topk_experts(self, mode, model, tokenizer, batch, k=1):
-        selector_split_idx = int(self.config['dataset']['special_part'][1:])
-        total_splits = [f'p{idx}' for idx in range(1, selector_split_idx + 1)]
+        total_splits = [f'p{idx}' for idx in range(1, self.curr_bound + 1)]
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
 
         # if p2, do not use topk experts
-        assert self.config['dataset']['special_part'] != 'p1'
+        assert self.curr_bound != 1
         if k >= len(total_splits):
             return [total_splits for _ in range(len(batch['sample_keys']))]
 
@@ -320,7 +326,7 @@ class LossSimilarity:
         return logits, loss, flat_loss.cpu().tolist()
 
     def generate_continual_logits(self, mode, model, tokenizer, batch,
-                                  extra_module_info=None, tag_to_loss_weight=None):
+                                  extra_module_info=None, tag_to_loss_weight=None, lwf_logit=False):
         if extra_module_info is None:
             extra_module_info = []
         # check split_to_model_cache
@@ -330,9 +336,11 @@ class LossSimilarity:
         total_splits, current_splits = self.get_current_splits(extra_module_info, train_expert_selector=False)
         target_tokens, token_to_tid = self.generate_continual_token_map(total_splits)
         batch_sz, target_sz = batch['input_ids'].shape[0], len(target_tokens)
+        if self.continual_method == 'lwf':
+            target_sz = self.config['label_num']
 
         if self.config['train']['use_expert_selector']:
-            assert self.config['train']['continual_method'] == 'our' and len(current_splits) == 1
+            assert self.continual_method == 'our' and len(current_splits) == 1
             # user expert selector as filter
             key_set = [f'{key}_es' for key in batch['sample_keys']]
             if all(key in self.continual_logit_cache for key in key_set):
@@ -351,9 +359,8 @@ class LossSimilarity:
                     split_groups[expert].append(bid)
         else:
             extra_splits = [info[0] for info in extra_module_info]
-            selector_split_idx = int(self.config['dataset']['special_part'][1:])
-            selector_splits = [f'p{idx}' for idx in range(1, selector_split_idx + 1)]
-            assert extra_splits == selector_splits[:-1]
+            selector_splits = [f'p{idx}' for idx in range(1, self.curr_bound + 1)]
+            assert self.continual_method != 'our' or extra_splits == selector_splits[:-1]
             split_groups = {split: list(range(batch_sz)) for split in selector_splits}
 
         # forward by split
@@ -361,7 +368,7 @@ class LossSimilarity:
         # low enough score
         logits = torch.full((batch_sz, target_sz), self.negative_logit, requires_grad=True).to(self.config['device'])
         for split, bids in split_groups.items():
-            if split in current_splits:
+            if self.continual_method != 'our' or split in current_splits:
                 continue
             split_targets = split_to_tags[split]
             split_tids = [token_to_tid[target] for target in split_targets]
@@ -389,11 +396,15 @@ class LossSimilarity:
                 temp_logits[:, split_tids] = loc_outputs
                 logits[bids, :] = temp_logits
 
-        assert len(current_splits) == 1
+        assert self.continual_method == 'emr' or len(current_splits) == 1
         current_targets = split_to_tags[current_splits[0]]
         current_tids = [token_to_tid[target] for target in current_targets]
         outputs = None
-        if not self.config['train']['use_expert_selector'] or current_splits[0] in split_groups:
+        if self.continual_method != 'our':
+            assert not self.config['train']['use_expert_selector']
+            outputs = self.forward_model_logits(batch, model, hidden_mask, is_selector=False)
+            logits = outputs
+        elif not self.config['train']['use_expert_selector'] or current_splits[0] in split_groups:
             bids = split_groups[current_splits[0]]
             loc_batch = {
                 'input_ids': batch['input_ids'][bids, :],
@@ -409,7 +420,7 @@ class LossSimilarity:
                    not self.config['train']['teacher_forcing'] or mode != 'train'
         logits = torch.log_softmax(logits, dim=1)
         if mode != 'train':
-            return logits
+            return outputs if lwf_logit else logits
 
         # generate verb_mat
         verb_mat = []
@@ -424,7 +435,7 @@ class LossSimilarity:
         loss = - torch.sum(flat_loss) / batch_sz
         assert not (torch.isnan(loss) or torch.isinf(loss))
 
-        if self.config['train']['continual_method'] == 'lwf':
+        if self.continual_method == 'lwf' and self.curr_bound != 1:
             lwf_loss = self.calculate_lwf_loss(batch['sample_keys'], outputs)
             loss += lwf_loss
 

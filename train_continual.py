@@ -15,7 +15,7 @@ logging.getLogger("pytorch_pretrained_bert.tokenization").setLevel(logging.ERROR
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--config', '-c', help='config path', type=str, default='configs/tacred_continual_typing.yaml')
+    parser.add_argument('--config', '-c', help='config path', type=str, default='configs/fewrel_continual_typing.yaml')
     parser.add_argument('--checkpoint', '-ch', help='checkpoint path', type=str, default='')
     parser.add_argument('--type_checkpoint', '-tch', help='checkpoint paths with type embeds', type=str, default='')
     parser.add_argument('--grad_checkpoint', '-gch', help='path of grad_mean and grad_fisher', type=str, default='')

@@ -7,7 +7,7 @@ from utils import load_json
 from matplotlib import pyplot as plt
 
 
-def plot_metrics(cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
+def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
     labels = [s for s in cycle_suffix.split(',') if s]
     assert len(labels) > 0
     colors = ['red', 'blue', 'orange', 'yellow', 'green', 'cyan']
@@ -16,7 +16,7 @@ def plot_metrics(cycle_suffix: str, exp_prefix: str, plot_metric: str, start: in
         cur_acc = []
         for idx in range(start, 11):
             cur_split = f'p{idx}'
-            exp_path = f'tacred_supervised_{exp_prefix}_fine_p10_bert_large_' \
+            exp_path = f'{dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
                        f'lora4_mk00_{cur_split}{label}'
             test_metric = os.path.join('checkpoints', exp_path, 'test', 'metrics_test.json')
             if not os.path.exists(test_metric):
@@ -34,6 +34,8 @@ def plot_metrics(cycle_suffix: str, exp_prefix: str, plot_metric: str, start: in
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset_name', type=str, help='name of the dataset', default='fewrel',
+                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace'])
     parser.add_argument('--use_selector', type=int, choices=[0, 1, 2],
                         help='0-none, 1-co-train, 2-selector-first')
     parser.add_argument('--teacher_forcing', help='whether to user teacher forcing', action='store_true')
@@ -44,6 +46,7 @@ def main():
     parser.add_argument('--batch_new_old_ratio', type=float, help='batch new/old sample ratio', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'])
+    parser.add_argument('--continual_method', type=str, choices=['our', 'ewc', 'lwf', 'emr'])
     parser.add_argument('--loss_adverse_step', type=int, default=-1)
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
     parser.add_argument('--plot', action='store_true', help='to plot the test accuracies')
@@ -53,21 +56,27 @@ def main():
 
     method_prefix_map = {'prompt': 'pt', 'marker': 'mk', 'linear': 'li'}
     if args.plot:
-        plot_metrics(args.cycle_suffix, method_prefix_map[args.method_type], args.plot_metric, args.start)
+        plot_metrics(args.dataset_name, args.cycle_suffix,
+                     method_prefix_map[args.method_type], args.plot_metric, args.start)
         return
 
-    bak_config_path = f'configs/tacred_continual_typing_{args.cycle_suffix}.yaml'
+    bak_config_path = f'configs/{args.dataset_name}_continual_typing_{args.cycle_suffix}.yaml'
     if not os.path.exists(bak_config_path):
-        shutil.copy('configs/tacred_continual_typing.yaml', bak_config_path)
+        shutil.copy(f'configs/{args.dataset_name}_continual_typing.yaml', bak_config_path)
     with open(bak_config_path, encoding='utf-8') as fin:
         config_base = yaml.load(fin, yaml.Loader)
     cycle_suffix = '_' + args.cycle_suffix if args.cycle_suffix != '' else ''
     exp_prefix = method_prefix_map[args.method_type]
     for idx in range(args.start, 11):
         cur_split = f'p{idx}'
+        config_base['train']['continual_method'] = args.continual_method
         config_base['dataset']['method_type'] = args.method_type
         config_base['dataset']['special_part'] = cur_split
-        exp_path = f'tacred_supervised_{exp_prefix}_fine_p10_bert_large_' \
+        if args.continual_method == 'emr':
+            config_base['dataset']['extra_special_part'] = ','.join([f'p{sid}' for sid in range(1, idx)])
+        else:
+            config_base['dataset']['extra_special_part'] = ''
+        exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
                    f'lora4_mk00_{cur_split}{cycle_suffix}'
         config_base['logging']['unique_string'] = exp_path
         config_base['logging']['cycle_suffix'] = args.cycle_suffix
@@ -89,7 +98,7 @@ def main():
         config_base['dataset']['batch_limit'] = args.batch_limit
         config_base['dataset']['batch_new_old_ratio'] = args.batch_new_old_ratio
         config_base['dataset']['seed'] = config_base['reproduce']['seed'] = args.seed
-        with open(f'configs/tacred_continual_typing{cycle_suffix}.yaml', 'w', encoding='utf-8') as fout:
+        with open(f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml', 'w', encoding='utf-8') as fout:
             yaml.dump(config_base, fout)
         print(cur_split, config_base)
         print('=' * 30)
@@ -98,18 +107,38 @@ def main():
 
         # start training
         cmd = ['python', 'train_continual.py', '--device', args.device,
-               '--config', f'configs/tacred_continual_typing{cycle_suffix}.yaml']
-        type_checkpoints = []
-        for sub_idx in range(1, idx):
-            sub_split = f'p{sub_idx}'
-            sub_exp_path = f'tacred_supervised_{exp_prefix}_fine_p10_bert_large_' \
-                           f'lora4_mk00_{sub_split}{cycle_suffix}'
-            type_checkpoints.append(os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl'))
-        if len(type_checkpoints) > 0:
-            cmd += ['--type_checkpoint', ','.join(type_checkpoints)]
-        if args.use_selector > 0 and idx >= 3:
-            assert len(type_checkpoints) > 0
-            cmd += ['--select_checkpoint', type_checkpoints[-1]]
+               '--config', f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml']
+        if args.continual_method == 'our':
+            type_checkpoints = []
+            for sub_idx in range(1, idx):
+                sub_split = f'p{sub_idx}'
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                               f'lora4_mk00_{sub_split}{cycle_suffix}'
+                type_checkpoints.append(os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl'))
+            if len(type_checkpoints) > 0:
+                cmd += ['--type_checkpoint', ','.join(type_checkpoints)]
+            if args.use_selector > 0 and idx >= 3:
+                assert len(type_checkpoints) > 0
+                cmd += ['--select_checkpoint', type_checkpoints[-1]]
+        elif args.continual_method == 'ewc':
+            if idx >= 2:
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                               f'lora4_mk00_p{idx-1}{cycle_suffix}'
+                cmd += ['--grad_checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'grad_fisher.pkl')]
+                cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
+        elif args.continual_method == 'lwf':
+            if idx >= 2:
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                               f'lora4_mk00_p{idx-1}{cycle_suffix}'
+                cmd += ['--grad_checkpoint', os.path.join(exp_path, 'models', 'lwf_logit.pkl')]
+                cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
+        elif args.continual_method == 'emr':
+            if idx >= 2:
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                               f'lora4_mk00_p{idx-1}{cycle_suffix}'
+                cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
+        else:
+            raise NotImplementedError('invalid continual_method')
         print(' '.join(cmd))
         print('=' * 30)
 

@@ -11,9 +11,9 @@ def gen_split_to_tags():
     """
     random.seed(100)
     part_to_file = {
-        'train': 're_data/tacred/train.txt',
-        'valid': 're_data/tacred/val.txt',
-        'test':  're_data/tacred/test.txt',
+        'train': 'data/tacred/train.txt',
+        'valid': 'data/tacred/val.txt',
+        'test':  'data/tacred/test.txt',
     }
     total_tag_set = set()
     for part in ['train', 'valid', 'test']:
@@ -47,9 +47,9 @@ def gen_split_to_tags():
 
 def gen_tacred_dataset():
     part_to_file, ret = {
-        'train': 're_data/tacred/train.txt',
-        'valid': 're_data/tacred/val.txt',
-        'test': 're_data/tacred/test.txt',
+        'train': 'data/tacred/train.txt',
+        'valid': 'data/tacred/val.txt',
+        'test': 'data/tacred/test.txt',
     }, {}
     with open('scripts/tacred_class_split_p10_tags.json') as fin:
         split_to_tags = json.load(fin)
@@ -97,9 +97,9 @@ def gen_tacred_dataset():
             tail_entity = sentence[tail_start_id+len(tail_start)+1:tail_end_id-1]
             sentence += f' In this sentence, {tail_entity} is the [MASK] of {head_entity}.'
             split_mask_samples[cur_sid].append((tag, sentence))
-        with open(f're_data/tacred/tacred_split_{part}_dataset_p10.json', 'w', encoding='utf-8') as fout:
+        with open(f'data/tacred/tacred_split_{part}_dataset_p10.json', 'w', encoding='utf-8') as fout:
             json.dump(split_samples, fout)
-        with open(f're_data/tacred/tacred_split_{part}_dataset_p10_mask.json', 'w', encoding='utf-8') as fout:
+        with open(f'data/tacred/tacred_split_{part}_dataset_p10_mask.json', 'w', encoding='utf-8') as fout:
             json.dump(split_mask_samples, fout)
         print(part, [len(split_set) for split_set in split_samples])
 
@@ -107,7 +107,7 @@ def gen_tacred_dataset():
 def find_max_length():
     for part in ['train', 'valid', 'test']:
         max_sent_len, max_sent = 0, ''
-        with open(f're_data/tacred/tacred_split_{part}_dataset_p10_mask.json', encoding='utf-8') as fin:
+        with open(f'data/tacred/tacred_split_{part}_dataset_p10_mask.json', encoding='utf-8') as fin:
             dataset = json.load(fin)
         for split_set in dataset:
             print(part, len(split_set))

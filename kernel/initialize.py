@@ -11,6 +11,7 @@ from transformers import T5Tokenizer, T5ForConditionalGeneration, AutoTokenizer,
 def init_tokenizer_model(config):
     model_name, model_path = config['plm']['model_name'], config['plm']['model_path']
     max_seq_len = config['dataloader']['max_seq_length']
+    dataset_name = config['dataset']['dataset_name']
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     if model_name == 't5':
         tokenizer = T5Tokenizer.from_pretrained(model_path, model_max_length=max_seq_len)
@@ -23,11 +24,19 @@ def init_tokenizer_model(config):
                len(tokenizer.tokenize("[unused2]"))
         if config['plm']['apply_lora'] or config['plm']['apply_adapter']:
             assert not (config['plm']['apply_lora'] and config['plm']['apply_adapter'])
-            use_expert_selector = config['train']['train_expert_selector'] or config['train']['use_expert_selector']
+            use_expert_selector = config['train']['train_expert_selector'] > 0 or config['train']['use_expert_selector']
+            use_expert_selector &= config['train']['continual_method'] == 'our'
             if config['dataset']['method_type'] == 'linear':
-                split_to_tags = load_json(f'scripts/tacred_class_split_{config["dataset"]["total_parts"]}_tags.json')
-                linear_dim = len(split_to_tags[config['dataset']['special_part']])
-                linear_dim_exp = int(config['dataset']['special_part'][1:])
+                split_to_tags = load_json(f'scripts/{dataset_name}_class_split_'
+                                          f'{config["dataset"]["total_parts"]}_tags.json')
+                if config['train']['continual_method'] == 'our':
+                    linear_dim = len(split_to_tags[config['dataset']['special_part']])
+                    linear_dim_exp = int(config['dataset']['special_part'][1:])
+                else:
+                    assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr']
+                    num_labels = sum(len(tags) for split, tags in split_to_tags.items() if split != 'all')
+                    linear_dim = num_labels
+                    linear_dim_exp = -1
             else:
                 linear_dim = linear_dim_exp = -1
             if use_expert_selector:

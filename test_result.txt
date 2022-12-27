@@ -8,5 +8,50 @@ tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib25_t2
 {"correct_num": 2451, "instance_num": 3325, "accuracy": 67.64, "total_accuracy": 73.71,
 "correct_num_expert": 2749, "instance_num_expert": 3325, "accuracy_expert": 79.55, "total_accuracy_expert": 82.68}
 
-2.
+2. learning rate 0.0005
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib50_t1
+{"correct_num": 2750, "instance_num": 3325, "accuracy": 78.08, "total_accuracy": 82.71,
+"correct_num_expert": 2830, "instance_num_expert": 3325, "accuracy_expert": 80.39, "total_accuracy_expert": 85.11}
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib50_t2
+{"correct_num": 2625, "instance_num": 3325, "accuracy": 75.12, "total_accuracy": 78.95,
+"correct_num_expert": 2785, "instance_num_expert": 3325, "accuracy_expert": 79.84, "total_accuracy_expert": 83.76}
 
+3. learning rate 0.0001
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib50_t1_2
+{"correct_num": 2418, "instance_num": 3325, "accuracy": 69.34, "total_accuracy": 72.72,
+"correct_num_expert": 2542, "instance_num_expert": 3325, "accuracy_expert": 72.07, "total_accuracy_expert": 76.45}
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib50_t2_2
+{"correct_num": 2282, "instance_num": 3325, "accuracy": 62.97, "total_accuracy": 68.63,
+"correct_num_expert": 2456, "instance_num_expert": 3325, "accuracy_expert": 70.7, "total_accuracy_expert": 73.86}
+
+4. learning rate 0.001
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib50_t1_3
+{"correct_num": 2811, "instance_num": 3325, "accuracy": 79.31, "total_accuracy": 84.54,
+"correct_num_expert": 2875, "instance_num_expert": 3325, "accuracy_expert": 81.22, "total_accuracy_expert": 86.47}
+tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p10_bat2lib50_t2_3
+{"correct_num": 2611, "instance_num": 3325, "accuracy": 73.87, "total_accuracy": 78.53,
+"correct_num_expert": 2872, "instance_num_expert": 3325, "accuracy_expert": 81.74, "total_accuracy_expert": 86.38}
+
+TACRED top-1 expert 50 * 50 (3 replication)
+"accuracy": 79.31, "total_accuracy": 84.54
+"accuracy": 77.46, "total_accuracy": 82.71
+"accuracy": 78.45, "total_accuracy": 82.14
+TACRED top-2 expert 50 * 50
+"accuracy": 75.12, "total_accuracy": 78.95
+
+TACRED EMR 50 * 50 (3 replication)
+"accuracy": 78.82, "total_accuracy": 83.61
+"accuracy": 77.33, "total_accuracy": 81.26
+"accuracy": 78.53, "total_accuracy": 82.11
+
+TACRED top-1 expert 25 * 50
+"accuracy": 75.24, "total_accuracy": 79.40
+TACRED top-2 expert 25 * 50
+"accuracy": 67.64, "total_accuracy": 73.71
+TACRED all expert 25 * 50
+"accuracy": 50.61, "total_accuracy": 60.51
+
+TACRED top-1 expert whole
+"accuracy": 80.98, "total_accuracy": 86.71,
+TACRED all expert whole
+"accuracy": 70.46, "total_accuracy": 78.71

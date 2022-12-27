@@ -4,12 +4,12 @@ dataset:
   entity_blank_ratio: 0.0
   total_parts: p10
   special_part: p2
-  extra_special_part: 'p1'
+  extra_special_part: ''
   use_selected: False
   use_mask: True
   batch_new_old_ratio: 1  # per batch #new_sample_num / #old_sample_num
   batch_limit: 50  # 20% is for validation
-  dataset_name: 'tacred'
+  dataset_name: 'fewrel'
   batch_limit_policy: 2  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
   replay_frequency: 1
   seed: 100
@@ -34,13 +34,13 @@ plm:
 
 logging:
   path_base: checkpoints
-  cycle_suffix: bat2lib50_emr
-  unique_string: tacred_supervised_li_fine_p10_bert_large_lora4_mk00_p2_bat2lib50_emr
+  cycle_suffix: bat2lib50_t1
+  unique_string: fewrel_supervised_li_fine_p10_bert_large_lora4_mk00_p2_bat2lib50_t1
   overwrite: true
 
 task: fewshot
 train:
-  num_epochs: 50
+  num_epochs: 20
   fewshot_epoch: 1
   cold_startup: false  # do extra training on the model
   verbalizer_strategy: mean
@@ -57,10 +57,10 @@ train:
   negative_weight: 0.5
   past_weight: 1.0
   similarity: dot
-  continual_method: emr
+  continual_method: our
   null_expert_logit: -100
-  use_expert_selector: false  # for split >= p2 when train_expert_selector == 2
-  train_expert_selector: 0  # for split >= p2, 0-none, 1-co-train, 2-selector-then-expert
+  use_expert_selector: true  # for split >= p2 when train_expert_selector == 2
+  train_expert_selector: 2  # for split >= p2, 0-none, 1-co-train, 2-selector-then-expert
   teacher_forcing: true
   expert_selector_factor: 0.1
   expert_topk: 1

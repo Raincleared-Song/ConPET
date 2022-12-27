@@ -96,8 +96,10 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
                     total_splits = [f'p{idx}' for idx in range(1, int(config['dataset']['total_parts'][1:]) + 1)]
                 else:
                     total_splits, _ = loss_sim.get_current_splits(extra_module_info, train_expert_selector=False)
-                target_tokens, token_to_tid = loss_sim.generate_continual_token_map(total_splits)
+                if config['train']['continual_method'] == 'lwf':
+                    total_splits = [f'p{sid+1}' for sid in range(loss_sim.curr_bound)]
                 label_mask = batch['input_ids'] == tokenizer.mask_token_id
+                target_tokens, token_to_tid = loss_sim.generate_continual_token_map(total_splits)
                 if config['train']['verbalizer_strategy'] == 'soft':
                     preds = torch.max(logits, dim=1)[1].cpu().tolist()
                     preds = [target_tokens[pred] for pred in preds]
@@ -156,6 +158,8 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
         })
 
         total_splits, _ = loss_sim.get_current_splits(extra_module_info, train_expert_selector=False)
+        if config['train']['continual_method'] != 'our' and mode == 'test':
+            total_splits = [f'p{sid+1}' for sid in range(loss_sim.curr_bound)]
         task_accuracies, tag_to_split = {split: [0, 0] for split in total_splits}, GLOBAL['continual_tag_to_split']
         if to_use_accu and 'split_accuracies' in accu_results:
             task_accuracies = accu_results['split_accuracies']

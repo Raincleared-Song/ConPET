@@ -1,4 +1,5 @@
 import math
+import copy
 import torch
 import warnings
 from global_var import GLOBAL
@@ -8,7 +9,9 @@ from .custom_loader import CustomLoader
 
 
 def init_type_descriptions(config):
-    continual_split_to_tags = load_json(f'scripts/tacred_class_split_{config["dataset"]["total_parts"]}_tags.json')
+    dataset_name = config['dataset']['dataset_name']
+    continual_split_to_tags = load_json(f'scripts/{dataset_name}_class_split_'
+                                        f'{config["dataset"]["total_parts"]}_tags.json')
     label_num = sum(len(tags) for split, tags in continual_split_to_tags.items() if split != 'all')
     continual_tag_to_split = ['' for _ in range(label_num)]
     for split, tags in continual_split_to_tags.items():
@@ -25,20 +28,21 @@ def init_contrastive_dataset(config, type_splits=None):
     assert config['dataset']['type'] == 'continual'
     special_part = config['dataset']['special_part']
     use_mask = config['dataset']['use_mask']
+    dataset_name = config['dataset']['dataset_name']
     if config['generate_logit']:
         current_split = int(config['dataset']['special_part'][1:])
         assert 1 <= current_split < 10
         special_part = f'p{current_split + 1}'
     ori_dataset = {}
     for part in ['train', 'valid', 'test']:
-        ori_dataset[part] = load_json(f're_data/tacred/tacred_split_{part}_dataset_p10'
+        ori_dataset[part] = load_json(f'data/{dataset_name}/{dataset_name}_split_{part}_dataset_p10'
                                       f'{"_mask" if use_mask else ""}.json')
     cur_sid = int(special_part[1:]) - 1
     dataset = {
-        'train': ori_dataset['train'][cur_sid],
-        'train_infer': ori_dataset['train'][cur_sid],
-        'valid_groups': ori_dataset['valid'][cur_sid],
-        'test_groups': ori_dataset['test'][cur_sid],
+        'train': copy.deepcopy(ori_dataset['train'][cur_sid]),
+        'train_infer': copy.deepcopy(ori_dataset['train'][cur_sid]),
+        'valid_groups': copy.deepcopy(ori_dataset['valid'][cur_sid]),
+        'test_groups': copy.deepcopy(ori_dataset['test'][cur_sid]),
     }
     label_num = len(GLOBAL['continual_tag_to_split'])
     use_selected = config['dataset']['use_selected'] if 'use_selected' in config['dataset'] else False
@@ -52,10 +56,6 @@ def init_contrastive_dataset(config, type_splits=None):
         for split in extra_special_part:
             if split not in total_splits:
                 total_splits.append(split)
-        if config['is_test']:  # ALERT: for all is_test
-            for idx in range(1, int(config['dataset']['total_parts'][1:]) + 1):
-                if f'p{idx}' not in total_splits and f'p{idx}' != special_part:
-                    total_splits.append(f'p{idx}')
         for split in total_splits:
             sid = int(split[1:]) - 1
             extra_dataset = {
@@ -68,6 +68,11 @@ def init_contrastive_dataset(config, type_splits=None):
                 if use_selected and key in ['train_infer', 'valid_groups']:
                     continue
                 dataset[key] += extra_dataset[key]
+        if config['is_test'] or config['train']['continual_method'] != 'our':
+            new_test_set = []
+            for sid in range(int(config['dataset']['special_part'][1:])):
+                new_test_set += ori_dataset['test'][sid]
+            dataset['test_groups'] = new_test_set
         all_in_splits = total_splits + [special_part]
         print(f'got test set for splits {all_in_splits} size {len(dataset["test_groups"])}')
     for key, val in dataset.items():
@@ -120,7 +125,7 @@ def data_collate_fn(config, tokenizer):
         assert len(ret_sent_ids) == sent_limit
         return ret_sent_ids
 
-    def loc_collate_fn_prompt(batch):
+    def loc_collate_fn_linear_re(batch):
         warnings.filterwarnings(action='ignore')
         texts, tags = [], []
         sample_keys = [item[0] for item in batch]
@@ -194,8 +199,64 @@ def data_collate_fn(config, tokenizer):
                    torch.sum(torch.eq(input_id, tokenizer.sep_token_id)) == 1
             assert not use_mask or torch.sum(torch.eq(input_id, tokenizer.mask_token_id)) == 1
 
-            if entity_blank_ratio > 0:
-                raise NotImplementedError('entity_blank_ratio must be 0')
+        ret = {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "tags": torch.LongTensor(tags),
+            "sample_keys": sample_keys,
+        }
+        return ret
+
+    def loc_collate_fn_linear_et(batch):
+        warnings.filterwarnings(action='ignore')
+        texts, tags = [], []
+        sample_keys = [item[0] for item in batch]
+        batch = [item[1] for item in batch]
+        for sample in batch:
+            tag, text = sample
+            texts.append(text)
+            tags.append(tag)
+
+        head_marker, tail_marker, blank_token = '[unused0]', '[unused1]', '[unused2]'
+
+        # mask entities by some ratio
+        if entity_blank_ratio > 0:
+            raise NotImplementedError('entity_blank_ratio must be 0')
+
+        text_inputs = tokenizer(texts, return_tensors='pt',
+                                padding='longest', truncation='longest_first', max_length=max_seq_len)
+        input_ids = text_inputs.input_ids
+        attention_mask = text_inputs.attention_mask
+        assert len(texts) == len(input_ids) == len(attention_mask) == len(tags)
+        mask_id = tokenizer.mask_token_id
+
+        head_id = tokenizer.convert_tokens_to_ids(head_marker)
+        tail_id = tokenizer.convert_tokens_to_ids(tail_marker)
+
+        for text, input_id in zip(texts, input_ids):
+            if head_id not in input_id or tail_id not in input_id or use_mask and mask_id not in input_id:
+                if use_mask:
+                    pos = text.find(' In this sentence,')
+                    assert pos != -1, text
+                    sent_ids = tokenizer(text[:pos], return_tensors='pt').input_ids.squeeze(0)[1:-1]
+                    extra_ids = tokenizer(text[pos+1:], return_tensors='pt').input_ids.squeeze(0)[1:-1]
+                else:
+                    sent_ids = tokenizer(text, return_tensors='pt').input_ids.squeeze(0)[1:-1]
+                    extra_ids = torch.LongTensor([])
+                extra_len, sent_limit = len(extra_ids), max_seq_len - 2 - len(extra_ids)
+
+                assert len(sent_ids) + len(extra_ids) + 2 > max_seq_len and len(input_id) == max_seq_len, text
+                head_pos = torch.nonzero(torch.eq(sent_ids, head_id), as_tuple=True)[0].item()
+                tail_pos = torch.nonzero(torch.eq(sent_ids, tail_id), as_tuple=True)[0].item()
+                assert 0 < tail_pos - head_pos, text
+                input_id[1:1 + sent_limit] = truncate_sentence_with_entity(sent_limit, head_pos, tail_pos, sent_ids)
+                input_id[-1 - extra_len:-1] = extra_ids
+            assert head_id in input_id and tail_id in input_id, text
+            assert not use_mask or mask_id in input_id, text
+            assert input_id[0] == tokenizer.cls_token_id and tokenizer.sep_token_id in input_id, text
+            assert torch.sum(torch.eq(input_id, tokenizer.cls_token_id)) == 1 and \
+                   torch.sum(torch.eq(input_id, tokenizer.sep_token_id)) == 1
+            assert not use_mask or torch.sum(torch.eq(input_id, tokenizer.mask_token_id)) == 1
 
         ret = {
             "input_ids": input_ids,
@@ -207,7 +268,12 @@ def data_collate_fn(config, tokenizer):
 
     assert method_type == 'linear'
     if method_type in ['prompt', 'linear']:
-        return loc_collate_fn_prompt
+        dataset_name = config['dataset']['dataset_name']
+        if dataset_name in ['fewrel', 'tacred', 'ace']:
+            return loc_collate_fn_linear_re
+        if dataset_name in ['fewnerd', 'ontonotes', 'bbn']:
+            return loc_collate_fn_linear_et
+        raise NotImplementedError('invalid dataset_name: ' + dataset_name)
     raise NotImplementedError('invalid method_type: ' + method_type)
 
 

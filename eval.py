@@ -51,7 +51,7 @@ def read_answers_from_txt(path: str):
 
 def check_average_score(args, path: str):
     answers = read_answers_from_txt(path)
-    class_split_tags = load_json(f'scripts/tacred_class_split_{args.total_parts}_tags.json')
+    class_split_tags = load_json(f'scripts/{args.dataset_name}_class_split_{args.total_parts}_tags.json')
     assert args.split != ''
     current_splits = args.split.split(',')
     consider_types = set()
@@ -113,7 +113,7 @@ def check_test_results(args):
     print(test_metrics)
     test_file = os.path.join(test_path, 'results_test.txt')
     answers = read_answers_from_txt(test_file)
-    class_split_tags = load_json(f'scripts/tacred_class_split_{args.total_parts}_tags.json')
+    class_split_tags = load_json(f'scripts/{args.dataset_name}_class_split_{args.total_parts}_tags.json')
     assert args.split != ''
     consider_types = set()
     for split in args.split.split(','):
@@ -140,7 +140,7 @@ def main():
     parser.add_argument('--label_path', type=str, help='path of the label file',
                         default='scripts/choices.json')
     parser.add_argument('--choice_num', type=int, help='choice number, -1 for auto', default=-1)
-    parser.add_argument('--dataset_name', type=str, help='dataset name', default='TACRED')
+    parser.add_argument('--dataset_name', type=str, help='dataset name', default='fewrel')
     parser.add_argument('--soft_prompt', type=int, help='soft prompt, -1 for auto', default=-1)
     parser.add_argument('--prefix', '-p', type=str, help='prefix of the "checkpoints"', default='.')
     parser.add_argument('--metric', type=str, help='the metric to be checked', default='accuracy')

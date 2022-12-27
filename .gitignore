@@ -3,7 +3,7 @@
 checkpoints/
 cache/
 __pycache__/
-re_data/
+data/
 
 .DS_Store
 test_data.py

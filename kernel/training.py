@@ -27,6 +27,7 @@ def generate_grad(config, train_loader, model, tokenizer, loss_sim,
     torch.save((grad_mean, grad_fisher), grad_fisher_path)
 
 
+@torch.no_grad()
 def generate_logit(config, train_loader, model, tokenizer, loss_sim):
     print('Calculating LWF logits ......')
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
@@ -39,7 +40,7 @@ def generate_logit(config, train_loader, model, tokenizer, loss_sim):
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(config['device'], non_blocking=True)
         with torch.no_grad():
-            logits = loss_sim.generate_continual_logits('test', model, tokenizer, batch, extra_module_info=None)
+            logits = loss_sim.generate_continual_logits('test', model, tokenizer, batch, lwf_logit=True)
         assert len(batch['sample_keys']) == len(logits)
         for sample_key, logit in zip(batch['sample_keys'], logits):
             generated_logits[sample_key] = logit.cpu()
@@ -107,6 +108,10 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
     if config['generate_logit']:
         generate_logit(config, train_loader, model, tokenizer, loss_sim)
         exit()
+
+    # generate lwf logits first
+    if config['train']['continual_method'] == 'lwf':
+        generate_logit(config, train_loader, model, tokenizer, loss_sim)
 
     step_per_epoch = len(train_loader) // grad_accu_step
     if global_step % step_per_epoch != 0:
@@ -209,8 +214,6 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
                                 extra_module_info=extra_module_info)
     if config['train']['continual_method'] == 'ewc':
         generate_grad(config, train_loader, model, tokenizer, loss_sim, type_embeds, type_counter, tag_to_loss_weight)
-    if config['train']['continual_method'] == 'lwf':
-        generate_logit(config, train_loader, model, tokenizer, loss_sim)
     with open(os.path.join(exp_path, 'flag'), 'w') as fout:
         fout.write('complete\n')
     return global_step, average_loss, \
