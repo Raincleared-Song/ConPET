@@ -140,18 +140,28 @@ def main():
     parser.add_argument('--label_path', type=str, help='path of the label file',
                         default='scripts/choices.json')
     parser.add_argument('--choice_num', type=int, help='choice number, -1 for auto', default=-1)
-    parser.add_argument('--dataset_name', type=str, help='dataset name', default='fewrel')
+    parser.add_argument('--dataset_name', type=str, help='dataset name', default='',
+                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', ''])
     parser.add_argument('--soft_prompt', type=int, help='soft prompt, -1 for auto', default=-1)
     parser.add_argument('--prefix', '-p', type=str, help='prefix of the "checkpoints"', default='.')
     parser.add_argument('--metric', type=str, help='the metric to be checked', default='accuracy')
     parser.add_argument('--side_metrics', '-sms', type=str,
                         help='other metrics to be printed', default='accuracy_expert')
     parser.add_argument('--mode', '-m', choices=['valid', 'test'], type=str, default='valid')
-    parser.add_argument('--total_parts', '-tp', choices=['p4', 'p10'], type=str, default='p10')
+    parser.add_argument('--total_parts', '-tp', choices=['p5', 'p10', ''], type=str, default='')
     parser.add_argument('--selector', '-sel', action='store_true')
     parser.add_argument('--split', '-s', help='check which part of categories', type=str, default='')
     parser.add_argument('--not_print_every', help='do not print all results', action='store_true')
     args = parser.parse_args()
+
+    if args.dataset_name == '':
+        for name in ['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace']:
+            if name in args.task:
+                args.dataset_name = name
+                break
+        assert args.dataset_name != '', args.task
+    if args.total_parts == '':
+        args.total_parts = 'p5' if args.dataset_name == 'ace' else 'p10'
 
     if args.split == '':
         cur_tot_idx = int(args.total_parts[1:])

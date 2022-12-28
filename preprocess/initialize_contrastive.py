@@ -29,13 +29,14 @@ def init_contrastive_dataset(config, type_splits=None):
     special_part = config['dataset']['special_part']
     use_mask = config['dataset']['use_mask']
     dataset_name = config['dataset']['dataset_name']
+    total_parts = config['dataset']['total_parts']
     if config['generate_logit']:
         current_split = int(config['dataset']['special_part'][1:])
         assert 1 <= current_split < 10
         special_part = f'p{current_split + 1}'
     ori_dataset = {}
     for part in ['train', 'valid', 'test']:
-        ori_dataset[part] = load_json(f'data/{dataset_name}/{dataset_name}_split_{part}_dataset_p10'
+        ori_dataset[part] = load_json(f'data/{dataset_name}/{dataset_name}_split_{part}_dataset_{total_parts}'
                                       f'{"_mask" if use_mask else ""}.json')
     cur_sid = int(special_part[1:]) - 1
     dataset = {

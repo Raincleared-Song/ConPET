@@ -7,16 +7,17 @@ from utils import load_json
 from matplotlib import pyplot as plt
 
 
-def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
+def plot_metrics(dataset_name: str, total_parts: str, cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
+    total_bound = int(total_parts[1:])
     labels = [s for s in cycle_suffix.split(',') if s]
     assert len(labels) > 0
     colors = ['red', 'blue', 'orange', 'yellow', 'green', 'cyan']
     assert len(colors) >= len(labels)
     for color, label in zip(colors, labels):
         cur_acc = []
-        for idx in range(start, 11):
+        for idx in range(start, total_bound + 1):
             cur_split = f'p{idx}'
-            exp_path = f'{dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+            exp_path = f'{dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                        f'lora4_mk00_{cur_split}{label}'
             test_metric = os.path.join('checkpoints', exp_path, 'test', 'metrics_test.json')
             if not os.path.exists(test_metric):
@@ -26,7 +27,7 @@ def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_met
         print(label, len(cur_acc), cur_acc)
         plt.plot(range(start, len(cur_acc)+start), cur_acc, label=label, color=color, marker='*')
     plt.legend()
-    plt.xticks(range(start, 11))
+    plt.xticks(range(start, total_bound + 1))
     plt.title(plot_metric)
     plt.tight_layout()
     plt.savefig(f'checkpoints/cycle_plot_{plot_metric}.png')
@@ -67,7 +68,9 @@ def main():
         config_base = yaml.load(fin, yaml.Loader)
     cycle_suffix = '_' + args.cycle_suffix if args.cycle_suffix != '' else ''
     exp_prefix = method_prefix_map[args.method_type]
-    for idx in range(args.start, 11):
+    total_parts = config_base['dataset']['total_parts']
+    total_bound = int(total_parts[1:])
+    for idx in range(args.start, total_bound + 1):
         cur_split = f'p{idx}'
         config_base['train']['continual_method'] = args.continual_method
         config_base['dataset']['method_type'] = args.method_type
@@ -76,7 +79,7 @@ def main():
             config_base['dataset']['extra_special_part'] = ','.join([f'p{sid}' for sid in range(1, idx)])
         else:
             config_base['dataset']['extra_special_part'] = ''
-        exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+        exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                    f'lora4_mk00_{cur_split}{cycle_suffix}'
         config_base['logging']['unique_string'] = exp_path
         config_base['logging']['cycle_suffix'] = args.cycle_suffix
@@ -112,7 +115,7 @@ def main():
             type_checkpoints = []
             for sub_idx in range(1, idx):
                 sub_split = f'p{sub_idx}'
-                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_{sub_split}{cycle_suffix}'
                 type_checkpoints.append(os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl'))
             if len(type_checkpoints) > 0:
@@ -122,19 +125,19 @@ def main():
                 cmd += ['--select_checkpoint', type_checkpoints[-1]]
         elif args.continual_method == 'ewc':
             if idx >= 2:
-                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
                 cmd += ['--grad_checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'grad_fisher.pkl')]
                 cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
         elif args.continual_method == 'lwf':
             if idx >= 2:
-                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
                 cmd += ['--grad_checkpoint', os.path.join(exp_path, 'models', 'lwf_logit.pkl')]
                 cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
         elif args.continual_method == 'emr':
             if idx >= 2:
-                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_p10_bert_large_' \
+                sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
                 cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
         else:

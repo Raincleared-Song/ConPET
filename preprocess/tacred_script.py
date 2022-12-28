@@ -1,6 +1,3 @@
-"""
-These codes are copied from https://github.com/thunlp/ContinualRE, author Xu Han 2019.
-"""
 import json
 import random
 

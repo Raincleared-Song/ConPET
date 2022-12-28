@@ -210,7 +210,7 @@ class LossSimilarity:
     def generate_continual_token_map(self, splits: list, strict=False):
         """
         ALERT: for self.continual_method not in ['our', 'lwf'], the result is different from
-        simply changing the splits to ['p1'-'p10']!
+        simply changing the splits to ['p1'-total_parts]!
         """
         if not strict and self.continual_method not in ['our', 'lwf']:
             label_num = self.config['label_num']

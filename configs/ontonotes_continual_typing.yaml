@@ -8,14 +8,14 @@ dataset:
   use_selected: False
   use_mask: True
   batch_new_old_ratio: 1  # per batch #new_sample_num / #old_sample_num
-  batch_limit: 50  # 20% is for validation
-  dataset_name: 'fewrel'
+  batch_limit: 1250  # 20% is for validation
+  dataset_name: 'ontonotes'
   batch_limit_policy: 2  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
   replay_frequency: 1
   seed: 100
 
 dataloader:
-    max_seq_length: 128
+    max_seq_length: 256
 
 plm:
   model_name: bert
@@ -27,15 +27,15 @@ plm:
   adapter_type: houlsby
   optimize:
     freeze_para: False
-    lr: 0.0005
+    lr: 0.00002
     weight_decay: 0.01
 #    scheduler:
 #      warmup_ratio: 0.1
 
 logging:
   path_base: checkpoints
-  cycle_suffix: bat2lib50_t1
-  unique_string: fewrel_supervised_li_fine_p10_bert_large_lora4_mk00_p2_bat2lib50_t1
+  cycle_suffix: bat2lib1250_t1
+  unique_string: ontonotes_supervised_li_fine_p10_bert_large_lora4_mk00_p2_bat2lib1250_t1
   overwrite: true
 
 task: fewshot
@@ -44,7 +44,7 @@ train:
   fewshot_epoch: 1
   cold_startup: false  # do extra training on the model
   verbalizer_strategy: mean
-  batch_size: 4
+  batch_size: 16
   num_steps: -1
   save_step: 8000
   save_option: 1  # 2 - every, 1 - best, 0 - none
