@@ -497,3 +497,36 @@ def test_by_best(config, model, tokenizer, loss_sim: LossSimilarity,
                        tag_set=None, extra_module_info=extra_module_info,
                        train_expert_selector=train_expert_selector)[0]
     return results
+
+
+@torch.no_grad()
+def select_continual_samples(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity):
+    assert config['task'] == 'fewshot' and config['train']['continual_method'] == 'emr'
+    model.eval()
+    train_loader = data_loaders['train_infer']
+    epoch_iterator = tqdm(train_loader, desc="data iteration") if len(train_loader) > 20 else train_loader
+    for step, batch in enumerate(epoch_iterator):
+        for key, value in batch.items():
+            if isinstance(value, torch.Tensor):
+                batch[key] = value.to(config['device'], non_blocking=True)
+        loss_sim.forward_select_continual_sample(model, tokenizer, batch)
+    selected_sample_keys = loss_sim.obtain_select_continual_sample()
+    selected_samples = {'train_infer': [], 'valid_groups': []}
+    for key, sample in train_loader.dataset:
+        if key in selected_sample_keys['train_infer']:
+            selected_samples['train_infer'].append(sample)
+        elif key in selected_sample_keys['valid_groups']:
+            selected_samples['valid_groups'].append(sample)
+    print(f'selected {len(selected_samples["train_infer"])} train_infer samples')
+    print(f'selected {len(selected_samples["valid_groups"])} valid_groups samples')
+    assert len(selected_samples['train_infer']) == len(selected_sample_keys['train_infer'])
+    assert len(selected_samples['valid_groups']) == len(selected_sample_keys['valid_groups'])
+    data_conf = config["dataset"]
+    cycle_suffix = config['logging']['cycle_suffix']
+    if cycle_suffix != '':
+        cycle_suffix = '_' + cycle_suffix
+    method_prefix_map = {'prompt': 'pt', 'marker': 'mk', 'linear': 'li'}
+    exp_prefix = method_prefix_map[data_conf['method_type']]
+    save_json(selected_samples,
+              f'cache/{data_conf["dataset_name"]}_continual_{data_conf["total_parts"]}_selected_{exp_prefix}'
+              f'_{data_conf["special_part"]}{cycle_suffix}.json')

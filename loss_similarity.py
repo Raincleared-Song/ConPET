@@ -396,7 +396,7 @@ class LossSimilarity:
                 temp_logits[:, split_tids] = loc_outputs
                 logits[bids, :] = temp_logits
 
-        assert self.continual_method == 'emr' or len(current_splits) == 1
+        assert self.continual_method.startswith('emr') or len(current_splits) == 1
         current_targets = split_to_tags[current_splits[0]]
         current_tids = [token_to_tid[target] for target in current_targets]
         outputs = None

@@ -3,14 +3,14 @@ dataset:
   method_type: linear
   entity_blank_ratio: 0.0
   total_parts: p10
-  special_part: p2
+  special_part: p1
   extra_special_part: ''
   use_selected: False
   use_mask: True
   batch_new_old_ratio: 1  # per batch #new_sample_num / #old_sample_num
   batch_limit: 2500  # 20% is for validation
   dataset_name: 'fewnerd'
-  batch_limit_policy: 2  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
+  batch_limit_policy: 0  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
   replay_frequency: 1
   seed: 100
 
@@ -34,8 +34,8 @@ plm:
 
 logging:
   path_base: checkpoints
-  cycle_suffix: bat2lib2500_t1
-  unique_string: fewnerd_supervised_li_fine_p10_bert_large_lora4_mk00_p2_bat2lib2500_t1
+  cycle_suffix: bat2lib2500_emr
+  unique_string: fewnerd_supervised_li_fine_p10_bert_large_lora4_mk00_p1_bat2lib2500_emr
   overwrite: true
 
 task: fewshot
@@ -57,10 +57,10 @@ train:
   negative_weight: 0.5
   past_weight: 1.0
   similarity: dot
-  continual_method: our
+  continual_method: 'emr'  # emr_abl for ablation study without progressive PETs
   null_expert_logit: -100
-  use_expert_selector: true  # for split >= p2 when train_expert_selector == 2
-  train_expert_selector: 2  # for split >= p2, 0-none, 1-co-train, 2-selector-then-expert
+  use_expert_selector: false  # for split >= p2 when train_expert_selector == 2
+  train_expert_selector: 0  # for split >= p2, 0-none, 1-co-train, 2-selector-then-expert
   teacher_forcing: true
   expert_selector_factor: 0.1
   expert_topk: 1

@@ -3,7 +3,7 @@ import argparse
 from loss_similarity import LossSimilarity
 from utils import load_save_config, init_seed
 from kernel import init_tokenizer_model, init_optimizer, load_checkpoint, model_list_test, train, load_model_list, \
-    test, get_split_by_path
+    test, get_split_by_path, select_continual_samples
 from preprocess import init_contrastive_dataset, init_contrastive_dataloader, init_type_descriptions
 
 import warnings
@@ -23,6 +23,7 @@ def main():
     parser.add_argument('--is_test', '--test', '-t', help='do test', action='store_true')
     parser.add_argument('--generate_grad', help='if generate grad and fisher', action='store_true')
     parser.add_argument('--generate_logit', help='if generate logit for old class', action='store_true')
+    parser.add_argument('--select_sample', help='if select reserved samples', action='store_true')
     parser.add_argument('--sample_num', help='the number of reserved samples per class', type=int, default=50)
     parser.add_argument('--device', '-d', help='gpu device', type=str, default='cuda:0')
     args = parser.parse_args()
@@ -46,7 +47,14 @@ def main():
     config['embed_size'] = loss_sim.embed_size
     data_loaders, train_sz = init_contrastive_dataloader(config, datasets, tokenizer)
     optimizer, scheduler = init_optimizer(config, model, train_sz)
-    if args.is_test:
+    if args.select_sample:
+        assert args.checkpoint != ''
+        trained_epoch, global_step, extra_cp = \
+            load_checkpoint(config, args.checkpoint, model, loss_sim, optimizer, scheduler)
+        print(f'selecting samples with epoch {trained_epoch} step {global_step}')
+        select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
+        results = f'select success: {args.sample_num} per class'
+    elif args.is_test:
         test_output_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'], 'test')
         if config['task'] != 'fewshot' and args.type_checkpoint != '':
             assert args.type_checkpoint != '' and len(checkpoints) == 3, 'test mode must have 3 checkpoints'
@@ -65,7 +73,7 @@ def main():
                                  type_embeds=params['type_embeds'], type_counter=params['type_counter'],
                                  extra_module_info=extra_module_info)
     else:
-        not_to_load = config['train']['continual_method'] in ['ewc', 'lwf', 'emr'] \
+        not_to_load = config['train']['continual_method'] in ['ewc', 'lwf', 'emr', 'emr_abl'] \
                   and config['logging']['unique_string'] not in args.checkpoint
         if not_to_load:
             trained_epoch, global_step, extra_cp = load_checkpoint(config, args.checkpoint, model, loss_sim)

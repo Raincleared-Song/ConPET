@@ -27,7 +27,7 @@ plm:
   adapter_type: houlsby
   optimize:
     freeze_para: False
-    lr: 0.00002
+    lr: 0.0001
     weight_decay: 0.01
 #    scheduler:
 #      warmup_ratio: 0.1

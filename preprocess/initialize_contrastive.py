@@ -30,6 +30,9 @@ def init_contrastive_dataset(config, type_splits=None):
     use_mask = config['dataset']['use_mask']
     dataset_name = config['dataset']['dataset_name']
     total_parts = config['dataset']['total_parts']
+    method_type = config['dataset']['method_type']
+    method_prefix_map = {'prompt': 'pt', 'marker': 'mk', 'linear': 'li'}
+    exp_prefix = method_prefix_map[method_type]
     if config['generate_logit']:
         current_split = int(config['dataset']['special_part'][1:])
         assert 1 <= current_split < 10
@@ -48,34 +51,45 @@ def init_contrastive_dataset(config, type_splits=None):
     label_num = len(GLOBAL['continual_tag_to_split'])
     use_selected = config['dataset']['use_selected'] if 'use_selected' in config['dataset'] else False
     use_selected &= not config['is_test']
-    assert config['task'] == 'fewshot' and not use_selected
-    if config['task'] == 'fewshot':
-        assert type_splits is not None
-        extra_special_part = [s for s in config['dataset']['extra_special_part'].split(',') if s]
-        total_splits = [split for split in type_splits]
-        total_splits = sorted(total_splits)
-        for split in extra_special_part:
-            if split not in total_splits:
-                total_splits.append(split)
-        for split in total_splits:
-            sid = int(split[1:]) - 1
-            extra_dataset = {
-                'train': ori_dataset['train'][sid],
-                'train_infer': ori_dataset['train'][sid],
-                'valid_groups': ori_dataset['valid'][sid],
-                'test_groups': ori_dataset['test'][sid],
-            }
-            for key in dataset.keys():
-                if use_selected and key in ['train_infer', 'valid_groups']:
-                    continue
-                dataset[key] += extra_dataset[key]
-        if config['is_test'] or config['train']['continual_method'] != 'our':
-            new_test_set = []
-            for sid in range(int(config['dataset']['special_part'][1:])):
-                new_test_set += ori_dataset['test'][sid]
-            dataset['test_groups'] = new_test_set
-        all_in_splits = total_splits + [special_part]
-        print(f'got test set for splits {all_in_splits} size {len(dataset["test_groups"])}')
+    assert config['task'] == 'fewshot'
+    extra_special_part = [s for s in config['dataset']['extra_special_part'].split(',') if s]
+    total_splits = [split for split in type_splits]
+    total_splits = sorted(total_splits)
+    for split in extra_special_part:
+        if split not in total_splits:
+            total_splits.append(split)
+    if config['select_sample']:  # ALERT: if select_sample, do not add more samples
+        total_splits = []
+    for split in total_splits:
+        sid = int(split[1:]) - 1
+        extra_dataset = {
+            'train': ori_dataset['train'][sid],
+            'train_infer': ori_dataset['train'][sid],
+            'valid_groups': ori_dataset['valid'][sid],
+            'test_groups': ori_dataset['test'][sid],
+        }
+        for key in dataset.keys():
+            if use_selected and key in ['train_infer', 'valid_groups']:
+                continue
+            dataset[key] += extra_dataset[key]
+        if use_selected:
+            assert config['train']['continual_method'] == 'emr'
+            cycle_suffix = config['logging']['cycle_suffix']
+            if cycle_suffix != '':
+                cycle_suffix = '_' + cycle_suffix
+            selected_cache_path = f'cache/{dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                                  f'_{split}{cycle_suffix}.json'
+            selected_samples = load_json(selected_cache_path)
+            for _ in range(config['dataset']['replay_frequency']):
+                dataset['train_infer'] += selected_samples['train_infer']
+            dataset['valid_groups'] += selected_samples['valid_groups']
+    if config['is_test'] or config['train']['continual_method'] != 'our':
+        new_test_set = []
+        for sid in range(int(config['dataset']['special_part'][1:])):
+            new_test_set += ori_dataset['test'][sid]
+        dataset['test_groups'] = new_test_set
+    all_in_splits = total_splits + [special_part]
+    print(f'got test set for splits {all_in_splits} size {len(dataset["test_groups"])}')
     for key, val in dataset.items():
         dataset[key] = [(f'{key}_{idx}', sample) for idx, sample in enumerate(val)]
     return dataset, label_num

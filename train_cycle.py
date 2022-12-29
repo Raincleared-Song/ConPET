@@ -1,4 +1,6 @@
+import math
 import os
+import time
 import yaml
 import shutil
 import argparse
@@ -7,7 +9,8 @@ from utils import load_json
 from matplotlib import pyplot as plt
 
 
-def plot_metrics(dataset_name: str, total_parts: str, cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
+def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
+    total_parts = 'p5' if dataset_name == 'ace' else 'p10'
     total_bound = int(total_parts[1:])
     labels = [s for s in cycle_suffix.split(',') if s]
     assert len(labels) > 0
@@ -33,6 +36,68 @@ def plot_metrics(dataset_name: str, total_parts: str, cycle_suffix: str, exp_pre
     plt.savefig(f'checkpoints/cycle_plot_{plot_metric}.png')
 
 
+def get_emr_replay_frequency(dataset_name: str, sid: int):
+    sample_num_map = {
+        'fewnerd': 100,
+        'ontonotes': 100,
+        'bbn': 50,
+        'fewrel': 50,
+        'tacred': 20,
+        'ace': 20,
+    }
+    class_num_map = {
+        'fewnerd': [7, 7, 7, 7, 7, 7, 6, 6, 6, 6],
+        'ontonotes': [9, 9, 9, 9, 9, 9, 8, 8, 8, 8],
+        'bbn': [5, 5, 5, 5, 5, 5, 4, 4, 4, 4],
+        'fewrel': [8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+        'tacred': [5, 4, 4, 4, 4, 4, 4, 4, 4, 4],
+        'ace': [4, 4, 4, 3, 3],
+    }
+    training_sample_map = {
+        'fewnerd': [30415, 24780, 51816, 101875, 34443, 29988, 12912, 24075, 15163, 14916],
+        'ontonotes': [17932, 27842, 16288, 34221, 21156, 25248, 31235, 7818, 18138, 11645],
+        'bbn': [4822, 6210, 2738, 5120, 46199, 7373, 5260, 6751, 2264, 2628],
+        'fewrel': [4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480],
+        'tacred': [651, 341, 2313, 2509, 667, 976, 1083, 248, 1469, 2755],
+        'ace': [2507, 1013, 724, 777, 627],
+    }
+    batch_size_map = {
+        'fewnerd': 16,
+        'ontonotes': 16,
+        'bbn': 16,
+        'fewrel': 16,
+        'tacred': 16,
+        'ace': 16,
+    }
+    batch_limit_map = {
+        'fewnerd': 2500,
+        'ontonotes': 1250,
+        'bbn': 500,
+        'fewrel': 400,
+        'tacred': 100,
+        'ace': 100,
+    }
+    base_old_frequency_map = {
+        'fewnerd': 50,
+        'ontonotes': 10,
+        'bbn': 5,
+        'fewrel': 5,
+        'tacred': 5,
+        'ace': 5,
+    }
+    batch_limit_train = int(math.ceil(batch_limit_map[dataset_name] * 0.8))
+    room_for_old_samples = batch_limit_train * batch_size_map[dataset_name] - \
+        training_sample_map[dataset_name][sid-1]
+    if room_for_old_samples <= 0:
+        return base_old_frequency_map[dataset_name]
+    old_class_tot = sum(cnt for cnt in class_num_map[dataset_name][:sid-1])
+    sample_num_train = int(math.ceil(sample_num_map[dataset_name] * 0.8))
+    replay_frequency = room_for_old_samples / (sample_num_train * old_class_tot)
+    replay_frequency = int(math.ceil(replay_frequency))
+    assert replay_frequency > 0
+    return replay_frequency
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_name', type=str, help='name of the dataset', default='fewrel',
@@ -47,7 +112,7 @@ def main():
     parser.add_argument('--batch_new_old_ratio', type=float, help='batch new/old sample ratio', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'])
-    parser.add_argument('--continual_method', type=str, choices=['our', 'ewc', 'lwf', 'emr'])
+    parser.add_argument('--continual_method', type=str, choices=['our', 'ewc', 'lwf', 'emr', 'emr_abl'])
     parser.add_argument('--loss_adverse_step', type=int, default=-1)
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
     parser.add_argument('--plot', action='store_true', help='to plot the test accuracies')
@@ -75,7 +140,7 @@ def main():
         config_base['train']['continual_method'] = args.continual_method
         config_base['dataset']['method_type'] = args.method_type
         config_base['dataset']['special_part'] = cur_split
-        if args.continual_method == 'emr':
+        if args.continual_method.startswith('emr'):
             config_base['dataset']['extra_special_part'] = ','.join([f'p{sid}' for sid in range(1, idx)])
         else:
             config_base['dataset']['extra_special_part'] = ''
@@ -101,12 +166,27 @@ def main():
         config_base['dataset']['batch_limit'] = args.batch_limit
         config_base['dataset']['batch_new_old_ratio'] = args.batch_new_old_ratio
         config_base['dataset']['seed'] = config_base['reproduce']['seed'] = args.seed
+        config_base['dataset']['use_selected'] = args.continual_method == 'emr'
+        if args.continual_method == 'emr' and idx >= 2:
+            config_base['dataset']['replay_frequency'] = get_emr_replay_frequency(args.dataset_name, idx)
         with open(f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml', 'w', encoding='utf-8') as fout:
             yaml.dump(config_base, fout)
         print(cur_split, config_base)
         print('=' * 30)
 
-        assert not config_base['dataset']['use_selected']
+        if args.continual_method == 'emr' and idx >= 2:
+            assert config_base['train']['train_expert_selector'] == 0 \
+                   and not config_base['train']['use_expert_selector'] and config_base['dataset']['use_selected'] \
+                   and config_base['dataset']['batch_limit_policy'] == 0
+            wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                        f'_p{idx-1}{cycle_suffix}.json'
+            print('waiting for ', wait_file, '.' * 30)
+            while True:
+                if os.path.exists(wait_file):
+                    print()
+                    break
+                time.sleep(60)
+            print('=' * 30)
 
         # start training
         cmd = ['python', 'train_continual.py', '--device', args.device,
@@ -135,7 +215,7 @@ def main():
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
                 cmd += ['--grad_checkpoint', os.path.join(exp_path, 'models', 'lwf_logit.pkl')]
                 cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
-        elif args.continual_method == 'emr':
+        elif args.continual_method.startswith('emr'):
             if idx >= 2:
                 sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'

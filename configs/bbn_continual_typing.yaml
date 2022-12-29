@@ -8,7 +8,7 @@ dataset:
   use_selected: False
   use_mask: True
   batch_new_old_ratio: 1  # per batch #new_sample_num / #old_sample_num
-  batch_limit: 1000  # 20% is for validation
+  batch_limit: 500  # 20% is for validation
   dataset_name: 'bbn'
   batch_limit_policy: 2  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
   replay_frequency: 1
@@ -27,7 +27,7 @@ plm:
   adapter_type: houlsby
   optimize:
     freeze_para: False
-    lr: 0.00002
+    lr: 0.00005
     weight_decay: 0.01
 #    scheduler:
 #      warmup_ratio: 0.1
@@ -40,7 +40,7 @@ logging:
 
 task: fewshot
 train:
-  num_epochs: 10
+  num_epochs: 20
   fewshot_epoch: 1
   cold_startup: false  # do extra training on the model
   verbalizer_strategy: mean

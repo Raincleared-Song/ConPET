@@ -33,7 +33,7 @@ def init_tokenizer_model(config):
                     linear_dim = len(split_to_tags[config['dataset']['special_part']])
                     linear_dim_exp = int(config['dataset']['special_part'][1:])
                 else:
-                    assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr']
+                    assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr', 'emr_abl']
                     num_labels = sum(len(tags) for split, tags in split_to_tags.items() if split != 'all')
                     linear_dim = num_labels
                     linear_dim_exp = -1
