@@ -3,6 +3,9 @@ import copy
 import random
 
 
+total_bound = 20
+
+
 def gen_data_splits():
     random.seed(100)
     dataset = {}
@@ -23,19 +26,19 @@ def gen_data_splits():
     label_set = copy.deepcopy(ori_label_set)
     random.shuffle(label_set)
     print({lab: len(dataset[lab]) for lab in label_set})
-    assert len(label_set) % 10 == 0
-    split_num = len(label_set) // 10
+    assert len(label_set) % total_bound == 0
+    split_num = len(label_set) // total_bound
     split_to_tags = {}
-    for idx in range(10):
+    for idx in range(total_bound):
         cur_tags = [label_to_tag[tag] for tag in label_set[split_num*idx:split_num*(idx+1)]]
         split_to_tags[f'p{idx+1}'] = sorted(cur_tags)
     split_to_tags['all'] = list(range(len(label_set)))
-    with open('scripts/fewrel_class_split_p10_tags.json', 'w') as fout:
+    with open(f'scripts/fewrel_class_split_p{total_bound}_tags.json', 'w') as fout:
         json.dump(split_to_tags, fout)
 
     head_start, head_end, tail_start, tail_end = [f"[unused{idx}]" for idx in range(4)]
     split_dataset = {'train': [], 'valid': [], 'test': []}
-    for sid in range(10):
+    for sid in range(total_bound):
         cur_tags = split_to_tags[f'p{sid+1}']
         cur_train, cur_valid, cur_test = [], [], []
         for tag in cur_tags:
@@ -72,7 +75,7 @@ def gen_data_splits():
         split_dataset['test'].append(cur_test)
     for part, split_datasets in split_dataset.items():
         print(part, [len(sub_set) for sub_set in split_datasets])
-        with open(f'data/fewrel/fewrel_split_{part}_dataset_p10_mask.json', 'w', encoding='utf-8') as fout:
+        with open(f'data/fewrel/fewrel_split_{part}_dataset_p{total_bound}_mask.json', 'w', encoding='utf-8') as fout:
             json.dump(split_datasets, fout)
     print(split_dataset['train'][0][9])
 
@@ -80,7 +83,7 @@ def gen_data_splits():
 def find_max_length():
     for part in ['train', 'valid', 'test']:
         max_sent_len, max_sent = 0, ''
-        with open(f'data/fewrel/fewrel_split_{part}_dataset_p10_mask.json', encoding='utf-8') as fin:
+        with open(f'data/fewrel/fewrel_split_{part}_dataset_p{total_bound}_mask.json', encoding='utf-8') as fin:
             dataset = json.load(fin)
         for split_set in dataset:
             print(part, len(split_set))
@@ -95,5 +98,5 @@ def find_max_length():
 
 
 if __name__ == '__main__':
-    # gen_data_splits()
+    gen_data_splits()
     find_max_length()

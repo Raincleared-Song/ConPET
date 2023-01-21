@@ -40,6 +40,12 @@ def gen_split_to_tags():
     split_to_tags['all'] = list(range(len(total_tag_set)))
     with open('scripts/tacred_class_split_p10_tags.json', 'w') as fout:
         json.dump(split_to_tags, fout)
+    with open('data/tacred/relation_name.txt') as fin:
+        lines = [line.strip() for line in fin.readlines()]
+    assert len(lines) == len(total_tag_set)
+    label_to_tag = {lab: idx for idx, lab in enumerate(lines)}
+    with open('scripts/tacred_label_to_tags.json', 'w') as fout:
+        json.dump(label_to_tag, fout)
 
 
 def gen_tacred_dataset():

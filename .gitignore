@@ -4,8 +4,10 @@ checkpoints/
 cache/
 __pycache__/
 data/
+results_compile/
 
 .DS_Store
 test_data.py
 test.sh
 train.sh
+check_*.py

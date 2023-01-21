@@ -84,7 +84,7 @@ class LossSimilarity:
 
     def forward_similarity_train(self, model, tokenizer, batch,
                                  type_embeds=None, type_counter=None,
-                                 extra_module_info=None, tag_to_loss_weight=None):
+                                 extra_module_info=None, tag_to_loss_weight=None, prototypes=None):
         if extra_module_info is None:
             extra_module_info = []
         train_target_pos = self.config['train']['train_target_pos']  # ALERT: need to be confirmed
@@ -120,7 +120,8 @@ class LossSimilarity:
                 loss += compare_loss * past_weight
         elif self.config['task'] == 'fewshot':
             _, loss, loss_vec = self.generate_continual_logits('train', model, tokenizer, batch,
-                                                               extra_module_info, tag_to_loss_weight)
+                                                               extra_module_info, tag_to_loss_weight,
+                                                               prototypes=prototypes)
             if self.config['train']['train_expert_selector'] == 1:
                 # train expert selector
                 _, loss_selector, t_loss_vec = self.generate_expert_selector_logits(
@@ -146,8 +147,8 @@ class LossSimilarity:
             for grad_checkpoint in grad_checkpoints:
                 print(f'loading {grad_checkpoint} ......')
                 grad_mean, grad_fisher = torch.load(grad_checkpoint, map_location='cpu')
-                grad_mean = [mean.to(self.config['device']) for mean in grad_mean]
-                grad_fisher = [fisher.to(self.config['device']) for fisher in grad_fisher]
+                grad_mean = {n: p.to(self.config['device']) for n, p in grad_mean.items()}
+                grad_fisher = {n: p.to(self.config['device']) for n, p in grad_fisher.items()}
                 grad_means.append(grad_mean)
                 grad_fishers.append(grad_fisher)
             self.split_to_model_cache.update({'grad_means': grad_means, 'grad_fishers': grad_fishers})
@@ -156,12 +157,14 @@ class LossSimilarity:
         grad_means, grad_fishers = \
             self.split_to_model_cache['grad_means'], self.split_to_model_cache['grad_fishers']
         assert len(grad_means) == len(grad_fishers)
-        grad_param = [param for param in model.parameters() if param.requires_grad]
+        params = {n.replace('.', '__'): p for n, p in model.named_parameters() if p.requires_grad}
         ewc_loss = torch.tensor(0.).to(self.config['device'])
-        for grad_mean, grad_fisher in zip(grad_means, grad_fishers):
-            assert len(grad_mean) == len(grad_fisher) == len(grad_param)
-            for mean, fisher, param in zip(grad_mean, grad_fisher, grad_param):
-                ewc_loss += (p_lambda * fisher * (param - mean) ** 2).sum()
+        # loop over all previous contexts as each context has separate penalty term
+        for mean, fisher in zip(grad_means, grad_fishers):
+            assert mean.keys() == fisher.keys() == params.keys()
+            for n in mean.keys():
+                ewc_loss += 0.5 * (fisher[n] * (params[n] - mean[n]) ** 2).sum()
+        ewc_loss *= p_lambda
         return ewc_loss
 
     def calculate_lwf_loss(self, sample_keys, whole_logits):
@@ -209,10 +212,10 @@ class LossSimilarity:
 
     def generate_continual_token_map(self, splits: list, strict=False):
         """
-        ALERT: for self.continual_method not in ['our', 'lwf'], the result is different from
+        ALERT: for self.continual_method not in ['our', 'our_abl', 'our_sim_pro', 'lwf'], the result is different from
         simply changing the splits to ['p1'-total_parts]!
         """
-        if not strict and self.continual_method not in ['our', 'lwf']:
+        if not strict and self.continual_method not in ['our', 'our_abl', 'our_sim_pro', 'lwf']:
             label_num = self.config['label_num']
             target_tokens = list(range(label_num))
             token_to_tid = {idx: tag for idx, tag in enumerate(target_tokens)}
@@ -229,6 +232,8 @@ class LossSimilarity:
         return target_tokens, token_to_tid
 
     def get_current_splits(self, extra_module_info, train_expert_selector):
+        if extra_module_info is None:
+            extra_module_info = []
         if train_expert_selector:
             assert self.config['train']['train_expert_selector'] and \
                    self.config['train']['verbalizer_strategy'] == 'mean'
@@ -255,11 +260,13 @@ class LossSimilarity:
     def forward_model_logits(batch, model, hidden_mask, is_selector: bool):
         forward_model = model.bert_selector if is_selector else model.bert_lora
         forward_linear = model.lora_linear_selector if is_selector else model.lora_linear_out
-        logits = forward_model(
+        representation = forward_model(
             input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
             output_hidden_states=True, return_dict=True)['hidden_states'][-1][hidden_mask]
-        logits = forward_linear(logits)
-        return logits
+        if model.lora_alignment is not None:
+            representation = model.lora_alignment(representation)
+        logits = forward_linear(representation)
+        return logits, representation
 
     @torch.no_grad()
     def select_topk_experts(self, mode, model, tokenizer, batch, k=1):
@@ -279,7 +286,7 @@ class LossSimilarity:
         split_to_tags, tag_to_split = GLOBAL['continual_split_to_tags'], GLOBAL['continual_tag_to_split']
         preds, tags = [], batch['tags'].cpu().tolist()
 
-        logits = self.forward_model_logits(batch, model, hidden_mask, is_selector=True)
+        logits, _ = self.forward_model_logits(batch, model, hidden_mask, is_selector=True)
         assert len(logits) == len(tags)
         for logit, tag in zip(logits, tags):
             cur_probs = []
@@ -304,7 +311,7 @@ class LossSimilarity:
 
         # forward by split
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
-        logits = self.forward_model_logits(batch, model, hidden_mask, is_selector=True)
+        logits, _ = self.forward_model_logits(batch, model, hidden_mask, is_selector=True)
         logits = torch.log_softmax(logits, dim=1)
 
         if mode != 'train':
@@ -326,7 +333,8 @@ class LossSimilarity:
         return logits, loss, flat_loss.cpu().tolist()
 
     def generate_continual_logits(self, mode, model, tokenizer, batch,
-                                  extra_module_info=None, tag_to_loss_weight=None, lwf_logit=False):
+                                  extra_module_info=None, tag_to_loss_weight=None,
+                                  lwf_logit=False, prototypes=None):
         if extra_module_info is None:
             extra_module_info = []
         # check split_to_model_cache
@@ -340,7 +348,7 @@ class LossSimilarity:
             target_sz = self.config['label_num']
 
         if self.config['train']['use_expert_selector']:
-            assert self.continual_method == 'our' and len(current_splits) == 1
+            assert self.continual_method.startswith('our') and len(current_splits) == 1
             # user expert selector as filter
             key_set = [f'{key}_es' for key in batch['sample_keys']]
             if all(key in self.continual_logit_cache for key in key_set):
@@ -360,7 +368,7 @@ class LossSimilarity:
         else:
             extra_splits = [info[0] for info in extra_module_info]
             selector_splits = [f'p{idx}' for idx in range(1, self.curr_bound + 1)]
-            assert self.continual_method != 'our' or extra_splits == selector_splits[:-1]
+            assert not self.continual_method.startswith('our') or extra_splits == selector_splits[:-1]
             split_groups = {split: list(range(batch_sz)) for split in selector_splits}
 
         # forward by split
@@ -368,7 +376,7 @@ class LossSimilarity:
         # low enough score
         logits = torch.full((batch_sz, target_sz), self.negative_logit, requires_grad=True).to(self.config['device'])
         for split, bids in split_groups.items():
-            if self.continual_method != 'our' or split in current_splits:
+            if not self.continual_method.startswith('our') or split in current_splits:
                 continue
             split_targets = split_to_tags[split]
             split_tids = [token_to_tid[target] for target in split_targets]
@@ -388,7 +396,8 @@ class LossSimilarity:
                     loc_outputs = torch.stack(loc_outputs).to(logits)
                 else:
                     split_model = self.split_to_model_cache[split]
-                    loc_outputs = self.forward_model_logits(loc_batch, split_model, loc_hidden_mask, is_selector=False)
+                    loc_outputs, _ = self.forward_model_logits(loc_batch, split_model,
+                                                               loc_hidden_mask, is_selector=False)
                     assert loc_outputs.shape[0] == len(key_set)
                     for key, logit in zip(key_set, loc_outputs):
                         self.continual_logit_cache[key] = logit.cpu()
@@ -400,10 +409,16 @@ class LossSimilarity:
         current_targets = split_to_tags[current_splits[0]]
         current_tids = [token_to_tid[target] for target in current_targets]
         outputs = None
-        if self.continual_method != 'our':
+        if not self.continual_method.startswith('our'):
             assert not self.config['train']['use_expert_selector']
-            outputs = self.forward_model_logits(batch, model, hidden_mask, is_selector=False)
-            logits = outputs
+            outputs, representation = self.forward_model_logits(batch, model, hidden_mask, is_selector=False)
+            if prototypes is None:
+                logits = outputs
+            else:
+                rep = representation.view(representation.shape[0], 1, representation.shape[-1])
+                proto = prototypes.view(1, -1, prototypes.shape[-1])
+                logits = (rep * proto).sum(-1)
+
         elif not self.config['train']['use_expert_selector'] or current_splits[0] in split_groups:
             bids = split_groups[current_splits[0]]
             loc_batch = {
@@ -411,7 +426,7 @@ class LossSimilarity:
                 'attention_mask': batch['attention_mask'][bids, :],
             }
             loc_hidden_mask = hidden_mask[bids, :]
-            outputs = self.forward_model_logits(loc_batch, model, loc_hidden_mask, is_selector=False)
+            outputs, _ = self.forward_model_logits(loc_batch, model, loc_hidden_mask, is_selector=False)
             temp_logits = logits[bids, :]
             temp_logits[:, current_tids] = outputs
             logits[bids, :] = temp_logits
@@ -439,7 +454,7 @@ class LossSimilarity:
             lwf_loss = self.calculate_lwf_loss(batch['sample_keys'], outputs)
             loss += lwf_loss
 
-        return logits, loss, flat_loss.cpu().tolist()
+        return outputs if lwf_logit else logits, loss, flat_loss.cpu().tolist()
 
     @torch.no_grad()
     def generate_inference_logits(self, model, tokenizer, batch):

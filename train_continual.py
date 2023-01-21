@@ -35,7 +35,7 @@ def main():
     checkpoints = [s for s in args.type_checkpoint.split(',') if s]
     type_splits = [get_split_by_path(config, path) for path in checkpoints]
     assert not (config['train']['continual_method'] == 'pwc' and config['dataset']['extra_special_part'] != '')
-    assert not (config['dataset']['special_part'] not in ['p1', 'p2']
+    assert config['select_sample'] or not (config['dataset']['special_part'] not in ['p1', 'p2']
                 and config['train']['use_expert_selector'] and args.select_checkpoint == '')
     # init tokenizer and model
     tokenizer, model = init_tokenizer_model(config)

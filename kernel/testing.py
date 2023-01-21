@@ -11,13 +11,16 @@ from preprocess import get_contrastive_loader_by_dataset, get_tag_set_by_dataset
 
 
 def save_test_results(mode: str, output_path, is_step=False, all_preds=None, all_tags=None,
-                      results=None, epoch=-1, step=-1, train_expert_selector=False):
+                      results=None, epoch=-1, step=-1, train_expert_selector=False, is_proto=False):
     assert output_path is not None
     assert mode == 'test' or not is_step and epoch >= 0 or is_step and step >= 0
     assert all_preds is None and all_tags is None or \
            all_preds is not None and all_tags is not None and len(all_preds) == len(all_tags)
     if mode == 'test':
-        suffix = 'test'
+        if is_proto:
+            suffix = 'test_' + (('s' + str(step)) if is_step else ('e' + str(epoch)))
+        else:
+            suffix = 'test'
     elif not is_step:
         suffix = 'e' + str(epoch)
     else:
@@ -39,7 +42,8 @@ def save_test_results(mode: str, output_path, is_step=False, all_preds=None, all
 @torch.no_grad()
 def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimilarity, mode: str,
          output_path: str = None, is_step=False, epoch=-1, step=-1, type_embeds=None, type_counter=None,
-         tag_set: set = None, extra_module_info: list = None, accu_results=None, train_expert_selector=False):
+         tag_set: set = None, extra_module_info: list = None, accu_results=None,
+         train_expert_selector=False, prototypes=None):
     model.eval()
     assert mode in ['valid', 'test']
 
@@ -91,7 +95,8 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
                 preds = [gather_t5_result(pred) for pred in preds]
                 tags = [gather_t5_result(tag) for tag in tags]
             elif not train_expert_selector:
-                logits = loss_sim.generate_continual_logits(mode, model, tokenizer, batch, extra_module_info)
+                logits = loss_sim.generate_continual_logits(mode, model, tokenizer, batch,
+                                                            extra_module_info, prototypes=prototypes)
                 if config['train']['continual_method'] in ['ewc', 'lwf'] and config['is_test']:
                     total_splits = [f'p{idx}' for idx in range(1, int(config['dataset']['total_parts'][1:]) + 1)]
                 else:
@@ -160,6 +165,8 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
         total_splits, _ = loss_sim.get_current_splits(extra_module_info, train_expert_selector=False)
         if config['train']['continual_method'] != 'our' and mode == 'test':
             total_splits = [f'p{sid+1}' for sid in range(loss_sim.curr_bound)]
+        if config['train']['continual_method'] == 'our_sim_pro' and mode == 'valid':
+            total_splits = [f'p{loss_sim.curr_bound}']
         task_accuracies, tag_to_split = {split: [0, 0] for split in total_splits}, GLOBAL['continual_tag_to_split']
         if to_use_accu and 'split_accuracies' in accu_results:
             task_accuracies = accu_results['split_accuracies']
@@ -204,7 +211,7 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
 
     if output_path is not None:
         save_test_results(mode, output_path, is_step, all_preds, all_tags, results, epoch=epoch, step=step,
-                          train_expert_selector=train_expert_selector)
+                          train_expert_selector=train_expert_selector, is_proto=prototypes is not None)
 
     return results, all_preds, all_tags
 
@@ -281,7 +288,8 @@ def model_list_test(config, test_loader, model, extra_module_states, tokenizer, 
 
 def valid_save(config, model, tokenizer, loss_sim: LossSimilarity, is_step: bool,
                best_results: dict, cur_step, cur_epoch, optimizer, scheduler,
-               valid_loader, valid_infer=None, train_infer=None, extra_module_info=None, train_expert_selector=False):
+               valid_loader, valid_infer=None, train_infer=None, extra_module_info=None,
+               train_expert_selector=False, prototypes=None):
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
     valid_output_path = os.path.join(exp_path, 'valid')
     os.makedirs(valid_output_path, exist_ok=True)
@@ -309,7 +317,7 @@ def valid_save(config, model, tokenizer, loss_sim: LossSimilarity, is_step: bool
                            valid_output_path, is_step=is_step, step=cur_step, epoch=cur_epoch,
                            type_embeds=type_embeds, type_counter=type_counter, tag_set=None,
                            extra_module_info=extra_module_info, accu_results=None,
-                           train_expert_selector=train_expert_selector)[0]
+                           train_expert_selector=train_expert_selector, prototypes=prototypes)[0]
         if results['accuracy'] > best_acc or best_num == -1:
             best_acc = results['accuracy']
             best_num = cur_num
@@ -448,7 +456,7 @@ def contrastive_group_test(config, mode, groups, model, tokenizer, loss_sim: Los
 def test_by_best(config, model, tokenizer, loss_sim: LossSimilarity,
                  best_epoch, best_epoch_acc, best_step, best_step_acc, test_loader,
                  test_infer=None, train_infer=None, best_model=None, extra_module_info=None,
-                 train_expert_selector=False):
+                 train_expert_selector=False, prototypes=None):
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
     model_path = os.path.join(exp_path, 'models')
     test_output_path = os.path.join(exp_path, 'test')
@@ -457,7 +465,7 @@ def test_by_best(config, model, tokenizer, loss_sim: LossSimilarity,
     #     test_output_path = None
     if config['train']['save_option'] <= 1:
         prefix = f'{"epoch" if best_epoch_acc > best_step_acc else "step"}-best'
-        p_epoch, p_step = -1, -1
+        p_epoch, p_step = best_epoch, best_step
     elif best_epoch_acc > best_step_acc:
         prefix = f'epoch-{best_epoch}'
         p_epoch, p_step = best_epoch, -1
@@ -495,13 +503,13 @@ def test_by_best(config, model, tokenizer, loss_sim: LossSimilarity,
                        is_step='step' in prefix, epoch=p_epoch, step=p_step,
                        type_embeds=type_embeds, type_counter=type_counter,
                        tag_set=None, extra_module_info=extra_module_info,
-                       train_expert_selector=train_expert_selector)[0]
+                       train_expert_selector=train_expert_selector, prototypes=prototypes)[0]
     return results
 
 
 @torch.no_grad()
 def select_continual_samples(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity):
-    assert config['task'] == 'fewshot' and config['train']['continual_method'] == 'emr'
+    assert config['task'] == 'fewshot' and config['train']['continual_method'] in ['emr', 'our_abl']
     model.eval()
     train_loader = data_loaders['train_infer']
     epoch_iterator = tqdm(train_loader, desc="data iteration") if len(train_loader) > 20 else train_loader
@@ -512,17 +520,18 @@ def select_continual_samples(config, data_loaders, model, tokenizer, loss_sim: L
         loss_sim.forward_select_continual_sample(model, tokenizer, batch)
     selected_sample_keys = loss_sim.obtain_select_continual_sample()
     selected_samples = {'train_infer': [], 'valid_groups': []}
+    cycle_suffix = config['logging']['cycle_suffix']
+    is_emar = 'emar' in cycle_suffix or 'eaemr' in cycle_suffix
     for key, sample in train_loader.dataset:
         if key in selected_sample_keys['train_infer']:
-            selected_samples['train_infer'].append(sample)
+            selected_samples['train_infer'].append((key, sample) if is_emar else sample)
         elif key in selected_sample_keys['valid_groups']:
-            selected_samples['valid_groups'].append(sample)
+            selected_samples['valid_groups'].append((key, sample) if is_emar else sample)
     print(f'selected {len(selected_samples["train_infer"])} train_infer samples')
     print(f'selected {len(selected_samples["valid_groups"])} valid_groups samples')
     assert len(selected_samples['train_infer']) == len(selected_sample_keys['train_infer'])
     assert len(selected_samples['valid_groups']) == len(selected_sample_keys['valid_groups'])
     data_conf = config["dataset"]
-    cycle_suffix = config['logging']['cycle_suffix']
     if cycle_suffix != '':
         cycle_suffix = '_' + cycle_suffix
     method_prefix_map = {'prompt': 'pt', 'marker': 'mk', 'linear': 'li'}
@@ -530,3 +539,4 @@ def select_continual_samples(config, data_loaders, model, tokenizer, loss_sim: L
     save_json(selected_samples,
               f'cache/{data_conf["dataset_name"]}_continual_{data_conf["total_parts"]}_selected_{exp_prefix}'
               f'_{data_conf["special_part"]}{cycle_suffix}.json')
+    return selected_samples

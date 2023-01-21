@@ -24,7 +24,7 @@ def save_model(path: str, model, optimizer_name, optimizer, scheduler,
         if hasattr(model, 'module'):
             model = model.module
         model_state_dict = model.state_dict()
-        if any('lora' in key for key in model_state_dict.keys()):
+        if any('lora_A' in key for key in model_state_dict.keys()):
             model_state_dict = lora.lora_state_dict(model)
         elif any('adapter' in key for key in model_state_dict.keys()):
             model_state_dict = model.state_dict()

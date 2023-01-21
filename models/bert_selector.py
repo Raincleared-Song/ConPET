@@ -28,7 +28,9 @@ class BertLoRAWithSelector(nn.Module):
             self.lora_linear_out = nn.Linear(self.bert_lora.config.hidden_size, linear_dim)
         if with_selector:
             self.bert_selector = BertForMaskedLMLoRA(self.config)
-            self.selector_dict = copy.deepcopy(lora.lora_state_dict(self.bert_selector))
+            selector_dict = lora.lora_state_dict(self.bert_selector) if config_dict['apply_lora'] \
+                else self.bert_selector.state_dict()
+            self.selector_dict = copy.deepcopy(selector_dict)
             self.linear_dim_exp = linear_dim_exp
             if linear_dim_exp > 0:
                 self.lora_linear_selector = nn.Linear(self.bert_lora.config.hidden_size, linear_dim_exp)
@@ -38,6 +40,13 @@ class BertLoRAWithSelector(nn.Module):
                all('lora' in key for key in err_msg_lora.missing_keys)
         assert err_msg_exp is None or len(err_msg_exp.unexpected_keys) == 0 and \
                all('lora' in key for key in err_msg_exp.missing_keys)
+
+        self.lora_alignment = None
+
+    def init_alignment(self):
+        if self.lora_alignment is None:
+            self.lora_alignment = nn.Linear(self.bert_lora.config.hidden_size, self.bert_lora.config.hidden_size)
+            self.lora_alignment = self.lora_alignment.to(self.extra_config['device'])
 
     def resize_token_embeddings(self, new_num_tokens: int):
         self.bert_lora.resize_token_embeddings(new_num_tokens)

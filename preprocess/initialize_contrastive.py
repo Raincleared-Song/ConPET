@@ -58,7 +58,8 @@ def init_contrastive_dataset(config, type_splits=None):
     for split in extra_special_part:
         if split not in total_splits:
             total_splits.append(split)
-    if config['select_sample']:  # ALERT: if select_sample, do not add more samples
+    # ALERT: if select_sample, do not add more samples
+    if config['select_sample'] or config['train']['continual_method'] == 'our_sim_pro':
         total_splits = []
     for split in total_splits:
         sid = int(split[1:]) - 1
@@ -73,7 +74,7 @@ def init_contrastive_dataset(config, type_splits=None):
                 continue
             dataset[key] += extra_dataset[key]
         if use_selected:
-            assert config['train']['continual_method'] == 'emr'
+            assert config['train']['continual_method'] in ['emr', 'our_abl']
             cycle_suffix = config['logging']['cycle_suffix']
             if cycle_suffix != '':
                 cycle_suffix = '_' + cycle_suffix
@@ -83,7 +84,7 @@ def init_contrastive_dataset(config, type_splits=None):
             for _ in range(config['dataset']['replay_frequency']):
                 dataset['train_infer'] += selected_samples['train_infer']
             dataset['valid_groups'] += selected_samples['valid_groups']
-    if config['is_test'] or config['train']['continual_method'] != 'our':
+    if config['is_test'] or config['train']['continual_method'] not in ['our', 'our_abl']:
         new_test_set = []
         for sid in range(int(config['dataset']['special_part'][1:])):
             new_test_set += ori_dataset['test'][sid]

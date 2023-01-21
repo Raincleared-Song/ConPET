@@ -14,9 +14,9 @@ from utils import update_tag_loss_count
 def train_selector(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
                    optimizer, scheduler, trained_epoch, global_step, best_results=None):
     # mark only model selector as trainable
-    assert isinstance(model, BertLoRAWithSelector)
-    for n, p in model.named_parameters():
-        p.requires_grad = 'bert_selector' in n
+    if isinstance(model, BertLoRAWithSelector) and config['plm']['apply_lora']:
+        for n, p in model.named_parameters():
+            p.requires_grad = 'bert_selector' in n or 'lora_linear_selector' in n or 'lora_alignment' in n
 
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
     model_path = os.path.join(exp_path, 'models')

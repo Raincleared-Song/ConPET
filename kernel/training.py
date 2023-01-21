@@ -13,15 +13,13 @@ from utils import load_json, save_json, load_partial_checkpoint, update_tag_loss
 from preprocess import get_contrastive_loader_by_dataset, get_tag_set_by_dataset
 
 
-def generate_grad(config, train_loader, model, tokenizer, loss_sim,
-                  type_embeds=None, type_counter=None, tag_to_loss_weight=None):
+def generate_grad(config, train_loader, model, tokenizer, loss_sim, tag_to_loss_weight=None):
     print('Calculating EWC grad and fisher ......')
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
     model_path = os.path.join(exp_path, 'models')
     grad_fisher_path = os.path.join(model_path, 'grad_fisher.pkl')
     grad_mean, grad_fisher = get_model_mean_fisher(
         config, train_loader, model, tokenizer, loss_sim,
-        type_embeds=type_embeds, type_counter=type_counter,
         extra_module_info=None, tag_to_loss_weight=tag_to_loss_weight,
     )
     torch.save((grad_mean, grad_fisher), grad_fisher_path)
@@ -62,9 +60,9 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
         print('selector test results:', exp_results)
 
     # mark only model itself as trainable
-    if isinstance(model, BertLoRAWithSelector):
+    if isinstance(model, BertLoRAWithSelector) and config['plm']['apply_lora']:
         for n, p in model.named_parameters():
-            p.requires_grad = 'bert_lora' in n
+            p.requires_grad = 'bert_lora' in n or 'lora_linear_out' in n or 'lora_alignment' in n
 
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
     model_path = os.path.join(exp_path, 'models')
@@ -102,7 +100,7 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
     tag_to_loss_count = {tag: [0, 0.] for tag in train_tag_set}  # tag -> [count, total_loss]
 
     if config['generate_grad']:
-        generate_grad(config, train_loader, model, tokenizer, loss_sim, type_embeds, type_counter, tag_to_loss_weight)
+        generate_grad(config, train_loader, model, tokenizer, loss_sim, tag_to_loss_weight)
         exit()
 
     if config['generate_logit']:
@@ -213,7 +211,7 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
                                 best_model=best_results[best_key],
                                 extra_module_info=extra_module_info)
     if config['train']['continual_method'] == 'ewc':
-        generate_grad(config, train_loader, model, tokenizer, loss_sim, type_embeds, type_counter, tag_to_loss_weight)
+        generate_grad(config, train_loader, model, tokenizer, loss_sim, tag_to_loss_weight)
     with open(os.path.join(exp_path, 'flag'), 'w') as fout:
         fout.write('complete\n')
     return global_step, average_loss, \

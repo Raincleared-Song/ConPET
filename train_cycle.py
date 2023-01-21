@@ -1,5 +1,6 @@
-import math
 import os
+import json
+import math
 import time
 import yaml
 import shutil
@@ -7,6 +8,9 @@ import argparse
 import subprocess
 from utils import load_json
 from matplotlib import pyplot as plt
+
+
+global_cp_path = '../../scy_test/checkpoints'
 
 
 def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_metric: str, start: int):
@@ -22,7 +26,7 @@ def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_met
             cur_split = f'p{idx}'
             exp_path = f'{dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                        f'lora4_mk00_{cur_split}{label}'
-            test_metric = os.path.join('checkpoints', exp_path, 'test', 'metrics_test.json')
+            test_metric = os.path.join(global_cp_path, exp_path, 'test', 'metrics_test.json')
             if not os.path.exists(test_metric):
                 continue
             test_metric = load_json(test_metric)[plot_metric]
@@ -33,10 +37,20 @@ def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_met
     plt.xticks(range(start, total_bound + 1))
     plt.title(plot_metric)
     plt.tight_layout()
-    plt.savefig(f'checkpoints/cycle_plot_{plot_metric}.png')
+    plt.savefig(f'{global_cp_path}/cycle_plot_{plot_metric}.png')
 
 
 def get_emr_replay_frequency(dataset_name: str, sid: int):
+    """
+    epoch_num_map = {
+        'fewnerd': 10,
+        'ontonotes': 20,
+        'bbn': 20,
+        'fewrel': 10,
+        'tacred': 20,
+        'ace': 20,
+    }
+    """
     sample_num_map = {
         'fewnerd': 100,
         'ontonotes': 100,
@@ -100,7 +114,7 @@ def get_emr_replay_frequency(dataset_name: str, sid: int):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset_name', type=str, help='name of the dataset', default='fewrel',
+    parser.add_argument('--dataset_name', type=str, help='name of the dataset',
                         choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace'])
     parser.add_argument('--use_selector', type=int, choices=[0, 1, 2],
                         help='0-none, 1-co-train, 2-selector-first')
@@ -112,13 +126,21 @@ def main():
     parser.add_argument('--batch_new_old_ratio', type=float, help='batch new/old sample ratio', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'])
-    parser.add_argument('--continual_method', type=str, choices=['our', 'ewc', 'lwf', 'emr', 'emr_abl'])
+    parser.add_argument('--continual_method', type=str, choices=['our', 'ewc', 'lwf',
+                                                                 'emr', 'emr_abl', 'our_abl', 'our_sim_pro'])
+    parser.add_argument('--not_apply_lora', action='store_true')
+    parser.add_argument('--wait', type=str, default='')
+    parser.add_argument('--global_cp_path', type=str, default='')
     parser.add_argument('--loss_adverse_step', type=int, default=-1)
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
     parser.add_argument('--plot', action='store_true', help='to plot the test accuracies')
     parser.add_argument('--plot_metric', type=str, help='the test metric to plot', default='accuracy')
     parser.add_argument('--device', type=str, help='the device to be used')
     args = parser.parse_args()
+
+    if args.global_cp_path != '':
+        global global_cp_path
+        global_cp_path = args.global_cp_path
 
     method_prefix_map = {'prompt': 'pt', 'marker': 'mk', 'linear': 'li'}
     if args.plot:
@@ -135,9 +157,21 @@ def main():
     exp_prefix = method_prefix_map[args.method_type]
     total_parts = config_base['dataset']['total_parts']
     total_bound = int(total_parts[1:])
+
+    if args.wait != '':
+        wait_flag = os.path.join(global_cp_path, args.wait, 'flag')
+        print('waiting for ', wait_flag, '.' * 30)
+        while True:
+            if os.path.exists(wait_flag):
+                print()
+                break
+            time.sleep(60)
+        print('=' * 30)
+
     for idx in range(args.start, total_bound + 1):
         cur_split = f'p{idx}'
         config_base['train']['continual_method'] = args.continual_method
+        config_base['plm']['apply_lora'] = not args.not_apply_lora
         config_base['dataset']['method_type'] = args.method_type
         config_base['dataset']['special_part'] = cur_split
         if args.continual_method.startswith('emr'):
@@ -148,7 +182,10 @@ def main():
                    f'lora4_mk00_{cur_split}{cycle_suffix}'
         config_base['logging']['unique_string'] = exp_path
         config_base['logging']['cycle_suffix'] = args.cycle_suffix
-        exp_path = os.path.join('checkpoints', exp_path)
+        config_base['logging']['path_base'] = global_cp_path
+        exp_path = os.path.join(global_cp_path, exp_path)
+        if os.path.exists(os.path.join(exp_path, 'flag')):
+            os.remove(os.path.join(exp_path, 'flag'))
         config_base['train']['expert_topk'] = args.topk
         config_base['train']['loss_adverse_step'] = args.loss_adverse_step
         if idx >= 2:
@@ -166,18 +203,16 @@ def main():
         config_base['dataset']['batch_limit'] = args.batch_limit
         config_base['dataset']['batch_new_old_ratio'] = args.batch_new_old_ratio
         config_base['dataset']['seed'] = config_base['reproduce']['seed'] = args.seed
-        config_base['dataset']['use_selected'] = args.continual_method == 'emr'
-        if args.continual_method == 'emr' and idx >= 2:
+        config_base['dataset']['use_selected'] = args.continual_method in ['emr', 'our_abl']
+        if args.continual_method in ['emr', 'our_abl'] and idx >= 2:
             config_base['dataset']['replay_frequency'] = get_emr_replay_frequency(args.dataset_name, idx)
         with open(f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml', 'w', encoding='utf-8') as fout:
             yaml.dump(config_base, fout)
         print(cur_split, config_base)
         print('=' * 30)
 
-        if args.continual_method == 'emr' and idx >= 2:
-            assert config_base['train']['train_expert_selector'] == 0 \
-                   and not config_base['train']['use_expert_selector'] and config_base['dataset']['use_selected'] \
-                   and config_base['dataset']['batch_limit_policy'] == 0
+        if args.continual_method in ['emr', 'our_abl'] and idx >= 2:
+            assert config_base['dataset']['use_selected'] and config_base['dataset']['batch_limit_policy'] == 0
             wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
                         f'_p{idx-1}{cycle_suffix}.json'
             print('waiting for ', wait_file, '.' * 30)
@@ -191,13 +226,13 @@ def main():
         # start training
         cmd = ['python', 'train_continual.py', '--device', args.device,
                '--config', f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml']
-        if args.continual_method == 'our':
+        if args.continual_method.startswith('our'):
             type_checkpoints = []
             for sub_idx in range(1, idx):
                 sub_split = f'p{sub_idx}'
                 sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_{sub_split}{cycle_suffix}'
-                type_checkpoints.append(os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl'))
+                type_checkpoints.append(os.path.join(global_cp_path, sub_exp_path, 'models', 'tot-best.pkl'))
             if len(type_checkpoints) > 0:
                 cmd += ['--type_checkpoint', ','.join(type_checkpoints)]
             if args.use_selector > 0 and idx >= 3:
@@ -205,21 +240,26 @@ def main():
                 cmd += ['--select_checkpoint', type_checkpoints[-1]]
         elif args.continual_method == 'ewc':
             if idx >= 2:
+                grad_checkpoints = []
+                for sub_idx in range(1, idx):
+                    sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
+                                   f'lora4_mk00_p{sub_idx}{cycle_suffix}'
+                    grad_checkpoints.append(os.path.join(global_cp_path, sub_exp_path, 'models', 'grad_fisher.pkl'))
+                cmd += ['--grad_checkpoint', ','.join(grad_checkpoints)]
                 sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
-                cmd += ['--grad_checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'grad_fisher.pkl')]
-                cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
+                cmd += ['--checkpoint', os.path.join(global_cp_path, sub_exp_path, 'models', 'tot-best.pkl')]
         elif args.continual_method == 'lwf':
             if idx >= 2:
                 sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
                 cmd += ['--grad_checkpoint', os.path.join(exp_path, 'models', 'lwf_logit.pkl')]
-                cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
+                cmd += ['--checkpoint', os.path.join(global_cp_path, sub_exp_path, 'models', 'tot-best.pkl')]
         elif args.continual_method.startswith('emr'):
             if idx >= 2:
                 sub_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                                f'lora4_mk00_p{idx-1}{cycle_suffix}'
-                cmd += ['--checkpoint', os.path.join('checkpoints', sub_exp_path, 'models', 'tot-best.pkl')]
+                cmd += ['--checkpoint', os.path.join(global_cp_path, sub_exp_path, 'models', 'tot-best.pkl')]
         else:
             raise NotImplementedError('invalid continual_method')
         print(' '.join(cmd))
@@ -234,6 +274,11 @@ def main():
         assert os.path.exists(os.path.join(exp_path, 'flag'))
         std_log.close()
         err_log.close()
+    final_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
+                     f'lora4_mk00_p{total_bound}{cycle_suffix}'
+    with open(os.path.join(global_cp_path, final_exp_path, 'test', 'metrics_test.json')) as fin:
+        results = json.load(fin)
+    print(results)
 
 
 if __name__ == '__main__':

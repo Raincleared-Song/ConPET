@@ -21,8 +21,13 @@ class CustomLoader:
                 random.shuffle(samples)
             random.shuffle(self.new_dataset)
         self.batch_new_old_ratio = config['dataset']['batch_new_old_ratio']
-        self.new_sample_num = int(batch_size * self.batch_new_old_ratio / (self.batch_new_old_ratio + 1))
-        self.old_sample_num = batch_size - self.new_sample_num
+        if self.batch_new_old_ratio > 0:
+            self.new_sample_num = int(batch_size * self.batch_new_old_ratio / (self.batch_new_old_ratio + 1))
+            self.old_sample_num = batch_size - self.new_sample_num
+        else:
+            new_old_ratio = - self.batch_new_old_ratio
+            self.old_sample_num = int(batch_size * new_old_ratio / (new_old_ratio + 1))
+            self.new_sample_num = batch_size - self.old_sample_num
         self.batch_limit = config['dataset']['batch_limit']
         self.batch_limit_policy = config['dataset']['batch_limit_policy']
         assert 0 < self.batch_limit_policy <= 2

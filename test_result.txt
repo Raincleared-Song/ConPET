@@ -55,3 +55,46 @@ TACRED top-1 expert whole
 "accuracy": 80.98, "total_accuracy": 86.71,
 TACRED all expert whole
 "accuracy": 70.46, "total_accuracy": 78.71
+
+BBN: ewc_e10_l1000, "accuracy": 9.79, "total_accuracy": 2.96
+BBN: lwf_e10_l01, 'accuracy': 14.06, 'total_accuracy': 4.16, 0.01
+BBN: lwf_e10_l001, 'accuracy': 10.99, 'total_accuracy': 3.26, 0.001
+BBN: lwf_e10_l0d5, 'accuracy': 3.23, 'total_accuracy': 1.53
+BBN: lwf_e10_l0d01, 'accuracy': 12.68, 'total_accuracy': 3.73
+BBN: lwf_e10_l0d05, 'accuracy': 12.77, 'total_accuracy': 4.07
+BBN: lwf_e10_l0d1, 'accuracy': 14.84, 'total_accuracy': 5.04
+BBN: lwf_e5_l0d5, 'accuracy': 3.15, 'total_accuracy': 2.01
+BBN: lwf_e5_l0d05, 'accuracy': 14.19, 'total_accuracy': 6.76
+BBN: lwf_e5_l0d01, 'accuracy': 12.67, 'total_accuracy': 3.71
+BBN: lwf_e5_l0d1, 'accuracy': 15.16, 'total_accuracy': 8.37
+
+FewNERD: ewc_e5_l100, "accuracy": 10.07, "total_accuracy": 4.81
+FewNERD: ewc_e5_l1000, 'accuracy': 21.44, 'total_accuracy': 12.67
+FewNERD: ewc_e5_l5000, 'accuracy': 9.37, 'total_accuracy': 5.28
+FewNERD: ewc_e5_l10000, "accuracy": 10.07, "total_accuracy": 4.81
+FewNERD: lwf_e1_l10, "accuracy": 4.23, "total_accuracy": 4.16, 10.0
+FewNERD: lwf_e3_l10, "accuracy": 2.48, "total_accuracy": 2.69, 10.0
+FewNERD: lwf_e5_l10, "accuracy": 2.94, "total_accuracy": 4.04, 10.0
+FewNERD: lwf_e5_l100, "accuracy": 2.21, "total_accuracy": 1.84, 100.0
+FewNERD: lwf_e5_l0001, "accuracy": 17.56, "total_accuracy": 8.35, 0.0001
+FewNERD: lwf_e5_l001, "accuracy": 17.76, "total_accuracy": 8.68, 0.01
+FewNERD: lwf_e5_l01, "accuracy": 28.06, "total_accuracy": 16.9, 0.1
+FewNERD: lwf_e5_l100, "accuracy": 2.2, "total_accuracy": 1.79, 100.0
+FewNERD: lwf_e5_l10, "accuracy": 2.95, "total_accuracy": 4.07, 10.0
+FewNERD: lwf_e5_l1, "accuracy": 6.3, "total_accuracy": 5.17, 1.0
+
+OntoNotes: lwf_e5_l01, 'accuracy': 17.25, 'total_accuracy': 10.98, 0.01
+OntoNotes: lwf_e5_l001, 'accuracy': 13.04, 'total_accuracy': 8.13, 0.001
+OntoNotes: lwf_e5_l0d5, 'accuracy': 6.89, 'total_accuracy': 8.34
+OntoNotes: lwf_e5_l0d1, 'accuracy': 24.88, 'total_accuracy': 19.13
+OntoNotes: lwf_e5_l0d05, 'accuracy': 20.86, 'total_accuracy': 14.8
+OntoNotes: lwf_e5_l0d01, 'accuracy': 17.25, 'total_accuracy': 10.98
+
+FewRel: ewc_e5_l1000, 'accuracy': 12.7, 'total_accuracy': 12.7
+FewRel: ewc_e5_l5000, 'accuracy': 18.23, 'total_accuracy': 18.23
+FewRel: lwf_e5_l00001, "accuracy": 10.61, "total_accuracy": 10.61, 1.0e-05
+FewRel: lwf_e5_l0001, "accuracy": 13.8, "total_accuracy": 13.8, 0.0001
+FewRel: lwf_e5_l001, "accuracy": 13.23, "total_accuracy": 13.23, 0.001
+FewRel: lwf_e5_l01, "accuracy": 19.8, "total_accuracy": 19.8, 0.01
+
+python train_cycle.py --dataset_name ontonotes --use_selector 0 --teacher_forcing --batch_limit_policy 0 --cycle_suffix bat2liwhole_lwf_e5_l0d01 --method_type linear --continual_method lwf --seed 100 --device cuda:4 --start 1

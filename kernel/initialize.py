@@ -22,39 +22,36 @@ def init_tokenizer_model(config):
         tokenizer.add_special_tokens({"additional_special_tokens": [f"[unused{idx}]" for idx in range(5)]})
         assert all(len(tokenizer.tokenize(f"[unused{idx}]")) == 1 for idx in range(5)) and \
                len(tokenizer.tokenize("[unused2]"))
-        if config['plm']['apply_lora'] or config['plm']['apply_adapter']:
-            assert not (config['plm']['apply_lora'] and config['plm']['apply_adapter'])
-            use_expert_selector = config['train']['train_expert_selector'] > 0 or config['train']['use_expert_selector']
-            use_expert_selector &= config['train']['continual_method'] == 'our'
-            if config['dataset']['method_type'] == 'linear':
-                split_to_tags = load_json(f'scripts/{dataset_name}_class_split_'
-                                          f'{config["dataset"]["total_parts"]}_tags.json')
-                if config['train']['continual_method'] == 'our':
-                    linear_dim = len(split_to_tags[config['dataset']['special_part']])
-                    linear_dim_exp = int(config['dataset']['special_part'][1:])
-                else:
-                    assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr', 'emr_abl']
-                    num_labels = sum(len(tags) for split, tags in split_to_tags.items() if split != 'all')
-                    linear_dim = num_labels
-                    linear_dim_exp = -1
+
+        assert not (config['plm']['apply_lora'] and config['plm']['apply_adapter'])
+        use_expert_selector = config['train']['train_expert_selector'] > 0 or config['train']['use_expert_selector']
+        use_expert_selector &= config['train']['continual_method'].startswith('our')
+        if config['dataset']['method_type'] == 'linear':
+            split_to_tags = load_json(f'scripts/{dataset_name}_class_split_'
+                                      f'{config["dataset"]["total_parts"]}_tags.json')
+            if config['train']['continual_method'].startswith('our'):
+                linear_dim = len(split_to_tags[config['dataset']['special_part']])
+                linear_dim_exp = int(config['dataset']['special_part'][1:])
             else:
-                linear_dim = linear_dim_exp = -1
-            if use_expert_selector:
-                model = BertLoRAWithSelector(config, with_selector=True, linear_dim=linear_dim,
-                                             linear_dim_exp=linear_dim_exp).to(config['device'])
-            else:
-                model = BertLoRAWithSelector(config, with_selector=False, linear_dim=linear_dim,
-                                             linear_dim_exp=linear_dim_exp).to(config['device'])
-            if use_expert_selector and config['select_checkpoint']:
-                assert isinstance(model, BertLoRAWithSelector)
-                print('loading expert selector from:', config['select_checkpoint'])
-                model_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
-                err_msg = model.load_selector_state_dict(model_state, strict=False)
-                assert len(err_msg.unexpected_keys) == 0 and \
-                       all('lora' not in key for key in err_msg.missing_keys)
+                assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr', 'emr_abl']
+                num_labels = sum(len(tags) for split, tags in split_to_tags.items() if split != 'all')
+                linear_dim = num_labels
+                linear_dim_exp = -1
         else:
-            model = AutoModelForMaskedLM.from_pretrained(model_path).to(config['device'])
-            model.config.max_length = max_seq_len
+            linear_dim = linear_dim_exp = -1
+        if use_expert_selector:
+            model = BertLoRAWithSelector(config, with_selector=True, linear_dim=linear_dim,
+                                         linear_dim_exp=linear_dim_exp).to(config['device'])
+        else:
+            model = BertLoRAWithSelector(config, with_selector=False, linear_dim=linear_dim,
+                                         linear_dim_exp=linear_dim_exp).to(config['device'])
+        if use_expert_selector and config['select_checkpoint']:
+            assert isinstance(model, BertLoRAWithSelector)
+            print('loading expert selector from:', config['select_checkpoint'])
+            model_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
+            err_msg = model.load_selector_state_dict(model_state, strict=False)
+            assert len(err_msg.unexpected_keys) == 0 and \
+                   all('lora' not in key for key in err_msg.missing_keys)
     else:
         raise NotImplementedError(f'invalid model name {model_name}')
     return tokenizer, model
@@ -97,6 +94,8 @@ def load_checkpoint(config, cp_path, model, loss_sim: LossSimilarity = None, opt
         model_to_load.load_state_dict(target_class.from_pretrained(cp_path).state_dict())
     else:
         params = torch.load(cp_path, map_location='cpu')
+        if any('lora_alignment' in name for name in params['model'].keys()):
+            model.init_alignment()
         strict = not (config['plm']['apply_lora'] or config['plm']['apply_adapter'])
         model_to_load.load_state_dict(params['model'], strict=strict)
 
