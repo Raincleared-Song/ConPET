@@ -20,8 +20,7 @@ def init_tokenizer_model(config):
     elif model_name in ['bert', 'roberta']:
         tokenizer = AutoTokenizer.from_pretrained(model_path, model_max_length=max_seq_len)
         tokenizer.add_special_tokens({"additional_special_tokens": [f"[unused{idx}]" for idx in range(5)]})
-        assert all(len(tokenizer.tokenize(f"[unused{idx}]")) == 1 for idx in range(5)) and \
-               len(tokenizer.tokenize("[unused2]"))
+        assert all(len(tokenizer.tokenize(f"[unused{idx}]")) == 1 for idx in range(5))
 
         assert not (config['plm']['apply_lora'] and config['plm']['apply_adapter'])
         use_expert_selector = config['train']['train_expert_selector'] > 0 or config['train']['use_expert_selector']

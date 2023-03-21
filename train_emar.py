@@ -110,7 +110,6 @@ def main():
         config['select_checkpoint'] = config['checkpoint'] = ''
     config['is_test'] = config['generate_grad'] = \
         config['generate_logit'] = config['select_sample'] = False
-    config['sample_num'] = sample_num_map[args.dataset_name]
     config['train']['continual_method'] = 'emr'  # to be checked
     config['dataset']['method_type'] = args.method_type
     config['logging']['cycle_suffix'] = args.cycle_suffix
