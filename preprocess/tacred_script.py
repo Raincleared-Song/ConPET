@@ -44,7 +44,7 @@ def gen_split_to_tags():
         lines = [line.strip() for line in fin.readlines()]
     assert len(lines) == len(total_tag_set)
     label_to_tag = {lab: idx for idx, lab in enumerate(lines)}
-    with open('scripts/tacred_label_to_tags.json', 'w') as fout:
+    with open('scripts/tacred_label_to_tag.json', 'w') as fout:
         json.dump(label_to_tag, fout)
 
 

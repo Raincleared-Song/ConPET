@@ -146,8 +146,8 @@ def main():
     sequence_results = []
     mem_train_data, mem_valid_data = [], []
     proto_memory = [[] for _ in range(label_num)]
-    # label_to_tags = load_json(f'data/{args.dataset_name}/{args.dataset_name_label_to_tags.json}')
-    # for label, tag in label_to_tags.items():
+    # label_to_tag = load_json(f'data/{args.dataset_name}/{args.dataset_name}_label_to_tag.json')
+    # for label, tag in label_to_tag.items():
     #     proto_memory[tag].append(label + ' is [MASK].')
     accu_test_data = []
 
