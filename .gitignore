@@ -4,6 +4,8 @@ checkpoints/
 cache/
 __pycache__/
 data/
+CRL/data
+CRL/scripts
 results_compile/
 
 .DS_Store
@@ -11,3 +13,5 @@ test_data.py
 test.sh
 train.sh
 check_*.py
+
+CRL/train_crl.sh
