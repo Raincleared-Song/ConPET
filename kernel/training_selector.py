@@ -41,7 +41,7 @@ def train_selector(config, data_loaders, model, tokenizer, loss_sim: LossSimilar
         print('loaded best results:', str(best_results))
     train_loss = 0.0
     model.zero_grad()
-    if config['train']['save_option'] >= 1:
+    if config['train']['save_option'] >= 1 and config['plm']['model_name'] != 'cpm':
         tokenizer.save_pretrained(model_path)
 
     train_tag_set = list(get_tag_set_by_dataset(train_loader))

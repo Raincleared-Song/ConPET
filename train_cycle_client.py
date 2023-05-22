@@ -11,7 +11,7 @@ global_cp_path = 'scy_test/checkpoints'
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_name', type=str, help='name of the dataset', default='fewrel',
-                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace'])
+                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', 'chent'])
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'])
     parser.add_argument('--start', type=int, help='start split', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
@@ -32,7 +32,7 @@ def main():
     exp_prefix = method_prefix_map[args.method_type]
     cycle_suffix = '_' + args.cycle_suffix if args.cycle_suffix != '' else ''
     disk_prefix = '/data2' if args.server_name in ['server109', 'server110'] else '/data'
-    if 'emar' or 'eaemr' in cycle_suffix:
+    if 'emar' in cycle_suffix or 'eaemr' in cycle_suffix:
         total_bound += 1
     for idx in range(args.start, total_bound):
         print('=' * 30)

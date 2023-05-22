@@ -10,7 +10,7 @@ dataset:
   batch_new_old_ratio: 1  # per batch #new_sample_num / #old_sample_num
   batch_limit: 2500  # 20% is for validation
   dataset_name: 'fewnerd'
-  batch_limit_policy: 0  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
+  batch_limit_policy: 2  # 0: not use batch_limit, 1: batch_limit*special_part_id, 2: batch_limit, 3: batch_limit + weight
   replay_frequency: 1
   seed: 100
 
@@ -18,8 +18,8 @@ dataloader:
     max_seq_length: 256
 
 plm:
-  model_name: bert
-  model_path: bert-large-uncased
+  model_name: llama
+  model_path: decapoda-research/llama-7b-hf
   apply_lora: true
   lora_r: 4
   apply_adapter: false
@@ -27,15 +27,18 @@ plm:
   adapter_type: houlsby
   optimize:
     freeze_para: False
-    lr: 0.00002
+    lr: 0.0005
     weight_decay: 0.01
+    adam_eps: 0.0001
+    beta1: 0.9
+    beta2: 0.999
 #    scheduler:
 #      warmup_ratio: 0.1
 
 logging:
   path_base: checkpoints
-  cycle_suffix: bat2lib2500_emr
-  unique_string: fewnerd_supervised_li_fine_p10_bert_large_lora4_mk00_p1_bat2lib2500_emr
+  cycle_suffix: llama_bat2lib2500_t1
+  unique_string: fewnerd_supervised_li_fine_p10_large_lora4_mk00_p1_llama_bat2lib2500_t1
   overwrite: true
 
 task: fewshot
@@ -44,9 +47,9 @@ train:
   fewshot_epoch: 1
   cold_startup: false  # do extra training on the model
   verbalizer_strategy: mean
-  batch_size: 16
+  batch_size: 8
   num_steps: -1
-  save_step: 8000
+  save_step: -1
   save_option: 1  # 2 - every, 1 - best, 0 - none
   shuffle_data: True
   save_pretrained: False
@@ -57,7 +60,7 @@ train:
   negative_weight: 0.5
   past_weight: 1.0
   similarity: dot
-  continual_method: 'emr'  # emr_abl for ablation study without progressive PETs
+  continual_method: 'our'  # emr_abl for ablation study without progressive PETs
   null_expert_logit: -100
   use_expert_selector: false  # for split >= p2 when train_expert_selector == 2
   train_expert_selector: 0  # for split >= p2, 0-none, 1-co-train, 2-selector-then-expert
@@ -65,6 +68,7 @@ train:
   expert_selector_factor: 0.1
   expert_topk: 1
   ewc_lambda: 1.0
+  loss_scale: 1.0
   loss_adverse_step: -1  # update loss adversarial weight every n steps
   valid_zero_shot: True
 

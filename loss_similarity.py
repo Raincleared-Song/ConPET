@@ -4,8 +4,8 @@ from tqdm import tqdm
 import torch.nn as nn
 from global_var import GLOBAL
 from sklearn.cluster import KMeans
-from models import BertLoRAWithSelector
-from utils import JensenShannonDivergence, dot_product, complex_sample
+from models import BertLoRAWithSelector, CPMLoRAWithSelector, LlamaLoRAWithSelector
+from utils import JensenShannonDivergence, dot_product, complex_sample, write_cache, read_cache
 
 
 class LossSimilarity:
@@ -18,10 +18,13 @@ class LossSimilarity:
         self.curr_bound = int(config['dataset']['special_part'][1:])
         self.loss_func, self.extra_module = self.get_similarity_by_config()
         self.use_linear = config['dataset']['method_type'] == 'linear'
+        self.model_name = config['plm']['model_name']
         self.continual_method = config['train']['continual_method']
         self.split_to_model_cache = {}
         self.prompt_token_map_cache = {}
         self.continual_logit_cache = {}
+        self.float_type = torch.float if self.model_name not in ['cpm', 'llama'] else torch.half
+        self.np_float_type = np.float16 if self.model_name not in ['cpm', 'llama'] else np.float32
         assert self.use_linear
 
     def get_similarity_by_config(self):
@@ -42,7 +45,10 @@ class LossSimilarity:
     def get_hidden_mask(self, batch, tokenizer):
         if self.config['dataset']['method_type'] in ['prompt', 'linear']:
             use_mask = self.config['dataset']['use_mask']
-            hidden_mask = batch['input_ids'] == (tokenizer.mask_token_id if use_mask else tokenizer.cls_token_id)
+            mask_id = tokenizer.mask_id if self.model_name == 'cpm' else tokenizer.mask_token_id
+            cls_id = tokenizer.bos_id if self.model_name == 'cpm' \
+                else (tokenizer.bos_token_id if self.model_name == 'llama' else tokenizer.cls_token_id)
+            hidden_mask = torch.eq(batch['input_ids'], (mask_id if use_mask else cls_id))
         else:
             raise NotImplementedError('invalid method_type: ' + self.config['method_type'])
         return hidden_mask
@@ -90,6 +96,8 @@ class LossSimilarity:
         train_target_pos = self.config['train']['train_target_pos']  # ALERT: need to be confirmed
         loss_vec = None
         if self.config['task'] in ['contrastive', 'continual']:
+            if self.model_name in ['cpm', 'llama']:
+                raise NotImplementedError('not implemented for CPM or LLaMA')
             batch_tag_set = [tag.item() for tag in batch['tags']]
             hidden_mask = self.get_hidden_mask(batch, tokenizer)
             outputs = model(
@@ -158,7 +166,7 @@ class LossSimilarity:
             self.split_to_model_cache['grad_means'], self.split_to_model_cache['grad_fishers']
         assert len(grad_means) == len(grad_fishers)
         params = {n.replace('.', '__'): p for n, p in model.named_parameters() if p.requires_grad}
-        ewc_loss = torch.tensor(0.).to(self.config['device'])
+        ewc_loss = torch.tensor(0., dtype=self.float_type).to(self.config['device'])
         # loop over all previous contexts as each context has separate penalty term
         for mean, fisher in zip(grad_means, grad_fishers):
             assert mean.keys() == fisher.keys() == params.keys()
@@ -190,25 +198,41 @@ class LossSimilarity:
 
     def generate_continual_experts(self, model, extra_module_info):
         split_to_tags = GLOBAL['continual_split_to_tags']
-        assert isinstance(model, BertLoRAWithSelector)
+        assert model is None or isinstance(model, (BertLoRAWithSelector, CPMLoRAWithSelector, LlamaLoRAWithSelector))
         for split, state in extra_module_info:
             if split in self.split_to_model_cache:
                 continue
             linear_dim = len(split_to_tags[split]) if self.use_linear else -1
-            split_model = BertLoRAWithSelector(self.config, with_selector=False,
-                                               linear_dim=linear_dim, linear_dim_exp=-1).to(self.config['device'])
-            split_model.resize_token_embeddings(model.config.vocab_size)
-            bert_state = {key: val for key, val in state.items() if key.startswith('bert')}
-            err_msg = split_model.bert_lora.load_state_dict(bert_state, strict=False)
-            assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
-            if self.use_linear:
-                prefix = 'lora_linear_out.'
-                linear_state = {key[len(prefix):]: val for key, val in state.items() if key.startswith(prefix)}
-                split_model.lora_linear_out.load_state_dict(linear_state, strict=True)
-                print(f'loaded linear weight for {split} ......')
-            split_model.zero_grad()
-            split_model.eval()
-            self.split_to_model_cache[split] = split_model
+            if self.model_name not in ['cpm', 'llama']:
+                split_model = BertLoRAWithSelector(self.config, with_selector=False,
+                                                   linear_dim=linear_dim, linear_dim_exp=-1).to(self.config['device'])
+                split_model.resize_token_embeddings(model.config.vocab_size)
+                bert_state = {key: val for key, val in state.items() if key.startswith('bert')}
+                err_msg = split_model.bert_lora.load_state_dict(bert_state, strict=False)
+                assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+                if self.use_linear:
+                    prefix = 'lora_linear_out.'
+                    linear_state = {key[len(prefix):]: val for key, val in state.items() if key.startswith(prefix)}
+                    split_model.lora_linear_out.load_state_dict(linear_state, strict=True)
+                    print(f'loaded linear weight for {split} ......')
+                split_model.zero_grad()
+                split_model.eval()
+                self.split_to_model_cache[split] = split_model
+            else:
+                prefix = 'backbone.'
+                split_state_dict = {key[len(prefix):]: val for key, val in state.items() if key.startswith(prefix)}
+                if self.use_linear:
+                    split_linear = nn.Linear(self.config['hidden_size'], linear_dim, dtype=torch.half)
+                    prefix = 'lora_projector.'
+                    linear_state = {key[len(prefix):]: val for key, val in state.items() if key.startswith(prefix)}
+                    split_linear.load_state_dict(linear_state, strict=True)
+                    split_linear.zero_grad()
+                    split_linear.eval()
+                    split_linear = split_linear.to(self.config['infer_device'])
+                    # print(f'loaded linear weight for {split} ......')
+                    model.add_delta(split, split_state_dict, split_linear)
+                else:
+                    raise NotImplementedError('CPM without linear is not implemented')
 
     def generate_continual_token_map(self, splits: list, strict=False):
         """
@@ -256,16 +280,24 @@ class LossSimilarity:
         total_split_set.sort()
         return total_split_set, current_splits
 
-    @staticmethod
-    def forward_model_logits(batch, model, hidden_mask, is_selector: bool):
-        forward_model = model.bert_selector if is_selector else model.bert_lora
-        forward_linear = model.lora_linear_selector if is_selector else model.lora_linear_out
-        representation = forward_model(
-            input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
-            output_hidden_states=True, return_dict=True)['hidden_states'][-1][hidden_mask]
-        if model.lora_alignment is not None:
-            representation = model.lora_alignment(representation)
-        logits = forward_linear(representation)
+    def forward_model_logits(self, split: str, linear_layer, batch, model, hidden_mask, is_selector: bool):
+        if hidden_mask.device != batch['input_ids'].device:
+            hidden_mask = hidden_mask.to(batch['input_ids'].device)
+        if self.model_name not in ['cpm', 'llama']:
+            forward_model = model.bert_selector if is_selector else model.bert_lora
+            forward_linear = model.lora_linear_selector if is_selector else model.lora_linear_out
+            representation = forward_model(
+                input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
+                output_hidden_states=True, return_dict=True)['hidden_states'][-1][hidden_mask]
+            if model.lora_alignment is not None:
+                representation = model.lora_alignment(representation)
+            logits = forward_linear(representation)
+        else:
+            if model.is_infer:
+                linear_layer = model.load_delta(split)
+            input_batch = {key: val for key, val in batch.items() if key not in ['tags', 'sample_keys']}
+            representation = model(**input_batch)[hidden_mask]
+            logits = linear_layer(representation)
         return logits, representation
 
     @torch.no_grad()
@@ -279,14 +311,15 @@ class LossSimilarity:
             return [total_splits for _ in range(len(batch['sample_keys']))]
 
         assert self.config['train']['train_expert_selector'] >= 1
-        assert isinstance(model, BertLoRAWithSelector)
+        assert isinstance(model, (BertLoRAWithSelector, CPMLoRAWithSelector, LlamaLoRAWithSelector))
         if self.config['train']['train_expert_selector'] == 1:
             raise NotImplementedError('wait for implementation')
 
         split_to_tags, tag_to_split = GLOBAL['continual_split_to_tags'], GLOBAL['continual_tag_to_split']
         preds, tags = [], batch['tags'].cpu().tolist()
 
-        logits, _ = self.forward_model_logits(batch, model, hidden_mask, is_selector=True)
+        assert self.model_name not in ['cpm', 'llama'] or model.is_infer
+        logits, _ = self.forward_model_logits('selector', None, batch, model, hidden_mask, is_selector=True)
         assert len(logits) == len(tags)
         for logit, tag in zip(logits, tags):
             cur_probs = []
@@ -311,7 +344,8 @@ class LossSimilarity:
 
         # forward by split
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
-        logits, _ = self.forward_model_logits(batch, model, hidden_mask, is_selector=True)
+        assert self.model_name not in ['cpm', 'llama'] or not model.is_infer
+        logits, _ = self.forward_model_logits('', model.lora_exp_projector, batch, model, hidden_mask, is_selector=True)
         logits = torch.log_softmax(logits, dim=1)
 
         if mode != 'train':
@@ -323,7 +357,7 @@ class LossSimilarity:
         for tag in batch['tags']:
             tag, word_ids = tag.item(), []
             split_label = int(tag_to_split[tag][1:]) - 1
-            cur_prob = torch.tensor([0. for _ in range(len(total_splits))])
+            cur_prob = torch.tensor([0. for _ in range(len(total_splits))], dtype=self.float_type)
             cur_prob[split_label] = 1.
             verb_mat.append(cur_prob * tag_to_loss_weight[tag])
         verb_mat = torch.stack(verb_mat).to(self.config['device'])
@@ -332,13 +366,25 @@ class LossSimilarity:
         assert not (torch.isnan(loss) or torch.isinf(loss))
         return logits, loss, flat_loss.cpu().tolist()
 
+    def convert_infer_batch(self, batch):
+        if self.model_name not in ['cpm', 'llama']:
+            infer_batch = batch
+        else:
+            infer_batch = {}
+            for key, val in batch.items():
+                if isinstance(val, torch.Tensor):
+                    val = val.to(self.config['infer_device'])
+                infer_batch[key] = val
+        return infer_batch
+
     def generate_continual_logits(self, mode, model, tokenizer, batch,
                                   extra_module_info=None, tag_to_loss_weight=None,
                                   lwf_logit=False, prototypes=None):
         if extra_module_info is None:
             extra_module_info = []
         # check split_to_model_cache
-        self.generate_continual_experts(model, extra_module_info)
+        infer_model = model if self.model_name not in ['cpm', 'llama'] else GLOBAL['infer_model']
+        self.generate_continual_experts(infer_model, extra_module_info)
 
         tag_to_split, split_to_tags = GLOBAL['continual_tag_to_split'], GLOBAL['continual_split_to_tags']
         total_splits, current_splits = self.get_current_splits(extra_module_info, train_expert_selector=False)
@@ -355,7 +401,7 @@ class LossSimilarity:
                 selected_experts = [self.continual_logit_cache[key] for key in key_set]
             else:
                 selected_experts = self.select_topk_experts(
-                    mode, model, tokenizer, batch, self.config['train']['expert_topk'])
+                    mode, infer_model, tokenizer, self.convert_infer_batch(batch), self.config['train']['expert_topk'])
                 assert len(key_set) == len(selected_experts)
                 for key, experts in zip(key_set, selected_experts):
                     self.continual_logit_cache[key] = experts
@@ -374,7 +420,8 @@ class LossSimilarity:
         # forward by split
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
         # low enough score
-        logits = torch.full((batch_sz, target_sz), self.negative_logit, requires_grad=True).to(self.config['device'])
+        logits = torch.full((batch_sz, target_sz), self.negative_logit,
+                            dtype=self.float_type, requires_grad=True).to(self.config['device'])
         for split, bids in split_groups.items():
             if not self.continual_method.startswith('our') or split in current_splits:
                 continue
@@ -382,25 +429,29 @@ class LossSimilarity:
             split_tids = [token_to_tid[target] for target in split_targets]
 
             with torch.no_grad():
-                loc_batch = {
-                    'input_ids': batch['input_ids'][bids, :],
-                    'attention_mask': batch['attention_mask'][bids, :],
-                }
+                loc_batch = {}
+                for key, val in batch.items():
+                    if isinstance(val, torch.Tensor):
+                        val = val[bids]
+                    loc_batch[key] = val
                 sample_keys = [batch['sample_keys'][bid] for bid in bids]
-                key_set = [(split, key) for key in sample_keys]
                 loc_hidden_mask = hidden_mask[bids, :]
-                if all(key in self.continual_logit_cache for key in key_set):
-                    loc_outputs = []
-                    for key in key_set:
-                        loc_outputs.append(self.continual_logit_cache[key])
-                    loc_outputs = torch.stack(loc_outputs).to(logits)
+
+                assert self.continual_method.startswith('our')
+                cache_results = [read_cache(split, sample_key, self.np_float_type) for sample_key in sample_keys]
+                if all(res is not None for res in cache_results):
+                    loc_outputs = torch.tensor(cache_results, dtype=self.float_type).to(logits)
                 else:
-                    split_model = self.split_to_model_cache[split]
-                    loc_outputs, _ = self.forward_model_logits(loc_batch, split_model,
-                                                               loc_hidden_mask, is_selector=False)
-                    assert loc_outputs.shape[0] == len(key_set)
-                    for key, logit in zip(key_set, loc_outputs):
-                        self.continual_logit_cache[key] = logit.cpu()
+                    split_model = self.split_to_model_cache[split] \
+                        if self.model_name not in ['cpm', 'llama'] else infer_model
+                    assert self.model_name not in ['cpm', 'llama'] or split_model.is_infer
+                    loc_outputs, _ = self.forward_model_logits(
+                        split, None, self.convert_infer_batch(loc_batch), split_model,
+                        loc_hidden_mask, is_selector=False)
+                    loc_outputs = loc_outputs.to(self.config['device'])
+                    assert loc_outputs.shape[0] == len(sample_keys)
+                    for sample_key, logit in zip(sample_keys, loc_outputs):
+                        write_cache(split, sample_key, logit.cpu().numpy(), dtype=self.np_float_type)
                 temp_logits = logits[bids, :]
                 temp_logits[:, split_tids] = loc_outputs
                 logits[bids, :] = temp_logits
@@ -409,9 +460,11 @@ class LossSimilarity:
         current_targets = split_to_tags[current_splits[0]]
         current_tids = [token_to_tid[target] for target in current_targets]
         outputs = None
+        assert self.model_name not in ['cpm', 'llama'] or not model.is_infer
         if not self.continual_method.startswith('our'):
             assert not self.config['train']['use_expert_selector']
-            outputs, representation = self.forward_model_logits(batch, model, hidden_mask, is_selector=False)
+            outputs, representation = self.forward_model_logits(
+                '', model.lora_projector, batch, model, hidden_mask, is_selector=False)
             if prototypes is None:
                 logits = outputs
             else:
@@ -421,12 +474,14 @@ class LossSimilarity:
 
         elif not self.config['train']['use_expert_selector'] or current_splits[0] in split_groups:
             bids = split_groups[current_splits[0]]
-            loc_batch = {
-                'input_ids': batch['input_ids'][bids, :],
-                'attention_mask': batch['attention_mask'][bids, :],
-            }
+            loc_batch = {}
+            for key, val in batch.items():
+                if isinstance(val, torch.Tensor):
+                    val = val[bids]
+                loc_batch[key] = val
             loc_hidden_mask = hidden_mask[bids, :]
-            outputs, _ = self.forward_model_logits(loc_batch, model, loc_hidden_mask, is_selector=False)
+            outputs, _ = self.forward_model_logits(
+                '', model.lora_projector, loc_batch, model, loc_hidden_mask, is_selector=False)
             temp_logits = logits[bids, :]
             temp_logits[:, current_tids] = outputs
             logits[bids, :] = temp_logits
@@ -442,7 +497,7 @@ class LossSimilarity:
         assert tag_to_loss_weight is not None
         for tag in batch['tags']:
             tag = tag.item()
-            cur_prob = torch.tensor([0. for _ in range(target_sz)])
+            cur_prob = torch.tensor([0. for _ in range(target_sz)], dtype=self.float_type)
             cur_prob[token_to_tid[tag]] = 1.
             verb_mat.append(cur_prob * tag_to_loss_weight[tag])
         verb_mat = torch.stack(verb_mat).to(self.config['device'])
@@ -498,17 +553,19 @@ class LossSimilarity:
         return losses
 
     @torch.no_grad()
-    def forward_select_continual_sample(self, model, tokenizer, batch):
-        outputs = model(
-            input_ids=batch['input_ids'], attention_mask=batch['attention_mask'], labels=None,
-            output_hidden_states=True, return_dict=True)
+    def forward_select_continual_sample(self, model, tokenizer, batch, write_db=False):
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
-
-        target_logits = outputs['hidden_states'][-1][hidden_mask].cpu().numpy()
+        target_logits, _ = self.forward_model_logits(
+            '', model.lora_projector, batch, model, hidden_mask, is_selector=False)
+        target_logits = target_logits.cpu().numpy()
         batch_tags, sample_keys = batch['tags'].cpu().tolist(), batch['sample_keys']
         assert len(target_logits) == len(batch_tags) == len(sample_keys)
 
+        cur_split = self.config['dataset']['special_part']
         for key, tag, state in zip(sample_keys, batch_tags, target_logits):
+            if write_db:
+                write_cache(cur_split, key, state, self.np_float_type)
+                continue
             if tag not in self.continual_logit_cache:
                 self.continual_logit_cache[tag] = []
             self.continual_logit_cache[tag].append((key, state))

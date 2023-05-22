@@ -4,7 +4,7 @@ from tqdm import tqdm
 from global_var import GLOBAL
 from torch.utils.data import DataLoader
 from loss_similarity import LossSimilarity
-from utils import save_json, gather_t5_result, save_model
+from utils import save_json, gather_t5_result, save_model, init_db
 from models import BertForMaskedLMLoRA
 from transformers import T5ForConditionalGeneration, AutoModelForMaskedLM
 from preprocess import get_contrastive_loader_by_dataset, get_tag_set_by_dataset
@@ -103,7 +103,7 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
                     total_splits, _ = loss_sim.get_current_splits(extra_module_info, train_expert_selector=False)
                 if config['train']['continual_method'] == 'lwf':
                     total_splits = [f'p{sid+1}' for sid in range(loss_sim.curr_bound)]
-                label_mask = batch['input_ids'] == tokenizer.mask_token_id
+                label_mask = loss_sim.get_hidden_mask(batch, tokenizer)
                 target_tokens, token_to_tid = loss_sim.generate_continual_token_map(total_splits)
                 if config['train']['verbalizer_strategy'] == 'soft':
                     preds = torch.max(logits, dim=1)[1].cpu().tolist()
@@ -510,6 +510,8 @@ def test_by_best(config, model, tokenizer, loss_sim: LossSimilarity,
 @torch.no_grad()
 def select_continual_samples(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity):
     assert config['task'] == 'fewshot' and config['train']['continual_method'] in ['emr', 'our_abl']
+    init_db(os.path.join('databases', f"{config['dataset']['dataset_name']}_{config['logging']['cycle_suffix']}.db"))
+    use_big_model = config['plm']['model_name'] in ['cpm', 'llama']
     model.eval()
     train_loader = data_loaders['train_infer']
     epoch_iterator = tqdm(train_loader, desc="data iteration") if len(train_loader) > 20 else train_loader
@@ -517,16 +519,17 @@ def select_continual_samples(config, data_loaders, model, tokenizer, loss_sim: L
         for key, value in batch.items():
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(config['device'], non_blocking=True)
-        loss_sim.forward_select_continual_sample(model, tokenizer, batch)
+        loss_sim.forward_select_continual_sample(model, tokenizer, batch, write_db=use_big_model)
+    if use_big_model:
+        return []
     selected_sample_keys = loss_sim.obtain_select_continual_sample()
     selected_samples = {'train_infer': [], 'valid_groups': []}
     cycle_suffix = config['logging']['cycle_suffix']
-    is_emar = 'emar' in cycle_suffix or 'eaemr' in cycle_suffix
-    for key, sample in train_loader.dataset:
+    for key, tag, text in train_loader.dataset:
         if key in selected_sample_keys['train_infer']:
-            selected_samples['train_infer'].append((key, sample) if is_emar else sample)
+            selected_samples['train_infer'].append((key, tag, text))
         elif key in selected_sample_keys['valid_groups']:
-            selected_samples['valid_groups'].append((key, sample) if is_emar else sample)
+            selected_samples['valid_groups'].append((key, tag, text))
     print(f'selected {len(selected_samples["train_infer"])} train_infer samples')
     print(f'selected {len(selected_samples["valid_groups"])} valid_groups samples')
     assert len(selected_samples['train_infer']) == len(selected_sample_keys['train_infer'])

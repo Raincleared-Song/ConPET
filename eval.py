@@ -141,7 +141,7 @@ def main():
                         default='scripts/choices.json')
     parser.add_argument('--choice_num', type=int, help='choice number, -1 for auto', default=-1)
     parser.add_argument('--dataset_name', type=str, help='dataset name', default='',
-                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', ''])
+                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', 'chent'])
     parser.add_argument('--soft_prompt', type=int, help='soft prompt, -1 for auto', default=-1)
     parser.add_argument('--prefix', '-p', type=str, help='prefix of the "checkpoints"', default='.')
     parser.add_argument('--metric', type=str, help='the metric to be checked', default='accuracy')
@@ -155,7 +155,7 @@ def main():
     args = parser.parse_args()
 
     if args.dataset_name == '':
-        for name in ['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace']:
+        for name in ['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', 'chent']:
             if name in args.task:
                 args.dataset_name = name
                 break

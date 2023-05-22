@@ -6,8 +6,9 @@ import yaml
 import shutil
 import argparse
 import subprocess
-from utils import load_json
+from utils import load_json, reset_database
 from matplotlib import pyplot as plt
+from global_var import get_epoch_map, get_learning_rate, get_batch_size_map
 
 
 global_cp_path = '../../scy_test/checkpoints'
@@ -40,7 +41,18 @@ def plot_metrics(dataset_name: str, cycle_suffix: str, exp_prefix: str, plot_met
     plt.savefig(f'{global_cp_path}/cycle_plot_{plot_metric}.png')
 
 
-def get_emr_replay_frequency(dataset_name: str, sid: int):
+sample_num_map = {
+    'fewnerd': 100,
+    'ontonotes': 100,
+    'bbn': 50,
+    'fewrel': 50,
+    'tacred': 20,
+    'ace': 20,
+    'chent': 100,
+}
+
+
+def get_emr_replay_frequency(dataset_name: str, sid: int, big_model: bool):
     """
     epoch_num_map = {
         'fewnerd': 10,
@@ -49,16 +61,9 @@ def get_emr_replay_frequency(dataset_name: str, sid: int):
         'fewrel': 10,
         'tacred': 20,
         'ace': 20,
+        'chent': 20,
     }
     """
-    sample_num_map = {
-        'fewnerd': 100,
-        'ontonotes': 100,
-        'bbn': 50,
-        'fewrel': 50,
-        'tacred': 20,
-        'ace': 20,
-    }
     class_num_map = {
         'fewnerd': [7, 7, 7, 7, 7, 7, 6, 6, 6, 6],
         'ontonotes': [9, 9, 9, 9, 9, 9, 8, 8, 8, 8],
@@ -66,6 +71,7 @@ def get_emr_replay_frequency(dataset_name: str, sid: int):
         'fewrel': [8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
         'tacred': [5, 4, 4, 4, 4, 4, 4, 4, 4, 4],
         'ace': [4, 4, 4, 3, 3],
+        'chent': [10, 10, 10, 10, 10, 10, 10, 10, 9, 9],
     }
     training_sample_map = {
         'fewnerd': [30415, 24780, 51816, 101875, 34443, 29988, 12912, 24075, 15163, 14916],
@@ -74,15 +80,9 @@ def get_emr_replay_frequency(dataset_name: str, sid: int):
         'fewrel': [4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480],
         'tacred': [651, 341, 2313, 2509, 667, 976, 1083, 248, 1469, 2755],
         'ace': [2507, 1013, 724, 777, 627],
+        'chent': [10516, 4451, 54931, 18106, 11730, 22629, 20031, 28184, 10116, 15190],
     }
-    batch_size_map = {
-        'fewnerd': 16,
-        'ontonotes': 16,
-        'bbn': 16,
-        'fewrel': 16,
-        'tacred': 16,
-        'ace': 16,
-    }
+    batch_size_map = get_batch_size_map(big_model)
     batch_limit_map = {
         'fewnerd': 2500,
         'ontonotes': 1250,
@@ -90,14 +90,16 @@ def get_emr_replay_frequency(dataset_name: str, sid: int):
         'fewrel': 400,
         'tacred': 100,
         'ace': 100,
+        'chent': 1250,
     }
     base_old_frequency_map = {
-        'fewnerd': 50,
+        'fewnerd': 10,
         'ontonotes': 10,
         'bbn': 5,
         'fewrel': 5,
         'tacred': 5,
         'ace': 5,
+        'chent': 10,
     }
     batch_limit_train = int(math.ceil(batch_limit_map[dataset_name] * 0.8))
     room_for_old_samples = batch_limit_train * batch_size_map[dataset_name] - \
@@ -115,11 +117,10 @@ def get_emr_replay_frequency(dataset_name: str, sid: int):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_name', type=str, help='name of the dataset',
-                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace'])
+                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', 'chent'])
     parser.add_argument('--use_selector', type=int, choices=[0, 1, 2],
                         help='0-none, 1-co-train, 2-selector-first')
     parser.add_argument('--teacher_forcing', help='whether to user teacher forcing', action='store_true')
-    parser.add_argument('--start', type=int, help='start split', default=1)
     parser.add_argument('--topk', type=int, help='expert topk', default=1)
     parser.add_argument('--batch_limit_policy', type=int, help='batch limit policy', default=0)
     parser.add_argument('--batch_limit', type=int, help='batch sample limit', default=1000)
@@ -135,11 +136,14 @@ def main():
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
     parser.add_argument('--plot', action='store_true', help='to plot the test accuracies')
     parser.add_argument('--plot_metric', type=str, help='the test metric to plot', default='accuracy')
+    parser.add_argument('--start', type=int, help='start split', default=1)
+    parser.add_argument('--clear', action='store_true', help='clear the history cache_flag and samples')
     parser.add_argument('--device', type=str, help='the device to be used')
+    parser.add_argument('--infer_device', type=str, default='', help='the device to be used for inference')
     args = parser.parse_args()
 
+    global global_cp_path
     if args.global_cp_path != '':
-        global global_cp_path
         global_cp_path = args.global_cp_path
 
     method_prefix_map = {'prompt': 'pt', 'marker': 'mk', 'linear': 'li'}
@@ -158,6 +162,9 @@ def main():
     total_parts = config_base['dataset']['total_parts']
     total_bound = int(total_parts[1:])
 
+    big_model = config_base['plm']['model_name'] in ['llama', 'cpm']
+    epoch_num_map = get_epoch_map(big_model)
+
     if args.wait != '':
         wait_flag = os.path.join(global_cp_path, args.wait, 'flag')
         print('waiting for ', wait_flag, '.' * 30)
@@ -167,6 +174,22 @@ def main():
                 break
             time.sleep(60)
         print('=' * 30)
+
+    # clear database entries in the future
+    print('resetting database ......')
+    reset_database(f'databases/{args.dataset_name}_{args.cycle_suffix}.db', args.start, total_bound + 1)
+
+    if args.clear and args.continual_method in ['emr', 'our_abl']:
+        for idx in range(args.start, total_bound + 1):
+            exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
+                       f'lora4_mk00_p{idx}{cycle_suffix}'
+            cur_wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                            f'_p{idx}{cycle_suffix}.json'
+            cur_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
+            if args.clear and os.path.exists(cur_wait_file):
+                os.remove(cur_wait_file)
+            if args.clear and os.path.exists(cur_flag_path):
+                os.remove(cur_flag_path)
 
     for idx in range(args.start, total_bound + 1):
         cur_split = f'p{idx}'
@@ -204,8 +227,11 @@ def main():
         config_base['dataset']['batch_new_old_ratio'] = args.batch_new_old_ratio
         config_base['dataset']['seed'] = config_base['reproduce']['seed'] = args.seed
         config_base['dataset']['use_selected'] = args.continual_method in ['emr', 'our_abl']
+        config_base['train']['num_epochs'] = epoch_num_map[args.dataset_name]
+        config_base['plm']['optimize']['lr'] = get_learning_rate(
+            big_model, args.dataset_name, idx, args.continual_method)
         if args.continual_method in ['emr', 'our_abl'] and idx >= 2:
-            config_base['dataset']['replay_frequency'] = get_emr_replay_frequency(args.dataset_name, idx)
+            config_base['dataset']['replay_frequency'] = get_emr_replay_frequency(args.dataset_name, idx, big_model)
         with open(f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml', 'w', encoding='utf-8') as fout:
             yaml.dump(config_base, fout)
         print(cur_split, config_base)
@@ -214,7 +240,30 @@ def main():
         if args.continual_method in ['emr', 'our_abl'] and idx >= 2:
             assert config_base['dataset']['use_selected'] and config_base['dataset']['batch_limit_policy'] == 0
             wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
-                        f'_p{idx-1}{cycle_suffix}.json'
+                        f'_p{idx - 1}{cycle_suffix}.json'
+            last_exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
+                            f'lora4_mk00_p{idx - 1}{cycle_suffix}'
+            cache_flag_path = os.path.join(global_cp_path, last_exp_path, 'cache_flag')
+
+            if big_model and not os.path.exists(wait_file):
+                # for big models, compute logits locally
+                cmd = ['python', 'train_continual.py', '--select_sample', '--sample_num',
+                       str(sample_num_map[args.dataset_name]),
+                       '--config', f'{global_cp_path}/{last_exp_path}/ori_config.yaml', '--checkpoint',
+                       f'{global_cp_path}/{last_exp_path}/models/tot-best.pkl',
+                       '--device', args.device, '--infer_device', args.infer_device]
+                print(' '.join(cmd))
+                assert os.path.exists(os.path.join(global_cp_path, last_exp_path, 'flag'))
+                std_log = open(os.path.join(global_cp_path, last_exp_path, 'std.log'), 'a', encoding='utf-8')
+                err_log = open(os.path.join(global_cp_path, last_exp_path, 'err.log'), 'a', encoding='utf-8')
+                subp = subprocess.Popen(cmd, stdout=std_log, stderr=err_log, bufsize=1)
+                subp.wait()
+                assert subp.returncode == 0
+                std_log.close()
+                err_log.close()
+                with open(cache_flag_path, 'w') as fout:
+                    fout.write('cache complete\n')
+
             print('waiting for ', wait_file, '.' * 30)
             while True:
                 if os.path.exists(wait_file):
@@ -224,7 +273,7 @@ def main():
             print('=' * 30)
 
         # start training
-        cmd = ['python', 'train_continual.py', '--device', args.device,
+        cmd = ['python', 'train_continual.py', '--device', args.device, '--infer_device', args.infer_device,
                '--config', f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml']
         if args.continual_method.startswith('our'):
             type_checkpoints = []

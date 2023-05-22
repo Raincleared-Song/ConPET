@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--select_sample', help='if select reserved samples', action='store_true')
     parser.add_argument('--sample_num', help='the number of reserved samples per class', type=int, default=50)
     parser.add_argument('--device', '-d', help='gpu device', type=str, default='cuda:0')
+    parser.add_argument('--infer_device', '-id', help='gpu device for inference', type=str, default='cuda:1')
     args = parser.parse_args()
 
     config: dict = load_save_config(args)
@@ -41,8 +42,8 @@ def main():
     tokenizer, model = init_tokenizer_model(config)
     init_type_descriptions(config)
     datasets, label_num = init_contrastive_dataset(config, type_splits)
-    config['label_num'], config['vocab_size'], config['hidden_size'] = \
-        label_num, len(tokenizer), model.config.hidden_size
+    config['label_num'], config['vocab_size'] = label_num, len(tokenizer)
+    config['hidden_size'] = model.config.hidden_size if config['plm']['model_name'] != 'cpm' else model.config.dim_model
     loss_sim = LossSimilarity(config)
     config['embed_size'] = loss_sim.embed_size
     data_loaders, train_sz = init_contrastive_dataloader(config, datasets, tokenizer)

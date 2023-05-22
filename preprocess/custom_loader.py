@@ -49,16 +49,15 @@ class CustomLoader:
         assert special_part_id > 1
         old_part_ids = list(range(1, special_part_id))
         old_dataset, new_dataset = {}, []
-        for sample_key, sample in dataset:
-            tag = sample[0]
+        for sample_key, tag, text in dataset:
             split_id = int(tag_to_split[tag][1:])
             if split_id != special_part_id:
                 assert split_id in old_part_ids
                 if split_id not in old_dataset:
                     old_dataset[split_id] = []
-                old_dataset[split_id].append((sample_key, sample))
+                old_dataset[split_id].append((sample_key, tag, text))
             else:
-                new_dataset.append((sample_key, sample))
+                new_dataset.append((sample_key, tag, text))
         print(f'old dataset pool: {len(old_dataset)}; new dataset pool: {len(new_dataset)}')
         return old_dataset, new_dataset
 

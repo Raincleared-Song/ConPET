@@ -5,11 +5,12 @@ import shutil
 import random
 from tqdm import tqdm
 import loralib as lora
+from global_var import GLOBAL
 from loss_similarity import LossSimilarity
 from models import mark_only_adapter_as_trainable, get_model_mean_fisher, BertLoRAWithSelector
 from .training_selector import train_selector
 from .testing import valid_save, test_by_best, test
-from utils import load_json, save_json, load_partial_checkpoint, update_tag_loss_count
+from utils import load_json, save_json, load_partial_checkpoint, update_tag_loss_count, init_db, clear_write_thread
 from preprocess import get_contrastive_loader_by_dataset, get_tag_set_by_dataset
 
 
@@ -59,10 +60,31 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
         print('selector best epoch:', exp_best_epoch, 'selector best epoch acc:', exp_best_epoch_acc)
         print('selector test results:', exp_results)
 
+    # state = torch.load(os.path.join(config['logging']['path_base'],
+    #                                 config['logging']['unique_string'],
+    #                                 'models', 'exp-tot-best.pkl'), map_location='cpu')['model']
+    # err_msg = model.load_state_dict(state, strict=False)
+    # assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+
     # mark only model itself as trainable
     if isinstance(model, BertLoRAWithSelector) and config['plm']['apply_lora']:
         for n, p in model.named_parameters():
             p.requires_grad = 'bert_lora' in n or 'lora_linear_out' in n or 'lora_alignment' in n
+
+    # transfer the results of the selector training to the infer_model
+    model_name, method_name = config['plm']['model_name'], config['train']['continual_method']
+    if model_name in ['cpm', 'llama'] and config['train']['use_expert_selector'] and method_name.startswith('our'):
+        linear_selector = model.lora_exp_projector
+        cpu_linear_selector = torch.nn.Linear(config['hidden_size'], model.linear_dim_exp, dtype=torch.half)
+        cpu_linear_selector.load_state_dict(linear_selector.state_dict())
+        cpu_linear_selector.zero_grad()
+        cpu_linear_selector.eval()
+        cpu_linear_selector = cpu_linear_selector.to(config['infer_device'])
+        lora_state = {key: val.cpu() for key, val in lora.lora_state_dict(model.backbone).items()}
+        GLOBAL['infer_model'].add_delta('selector', lora_state, cpu_linear_selector)
+
+    # initialize logit cache
+    init_db(os.path.join('databases', f"{config['dataset']['dataset_name']}_{config['logging']['cycle_suffix']}.db"))
 
     exp_path = os.path.join(config['logging']['path_base'], config['logging']['unique_string'])
     model_path = os.path.join(exp_path, 'models')
@@ -78,6 +100,7 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
     save_step = config['train']['save_step']
     grad_accu_step = config['train']['gradient_accumulation_steps']
     loss_adverse_step = config['train']['loss_adverse_step']
+    loss_scale = config['train']['loss_scale']
     if best_results is None:
         print('WARNING: best_results is None ......')
         best_results = {
@@ -90,7 +113,7 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
         print('loaded best results:', str(best_results))
     train_loss = 0.0
     model.zero_grad()
-    if config['train']['save_option'] >= 1:
+    if config['train']['save_option'] >= 1 and config['plm']['model_name'] != 'cpm':
         tokenizer.save_pretrained(model_path)
 
     train_tag_set = list(get_tag_set_by_dataset(train_loader))
@@ -156,11 +179,11 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
             if grad_accu_step > 1:
                 loss /= grad_accu_step
 
+            loss /= loss_scale
             loss.backward()
             train_loss += loss.item()
 
             if (step + 1) % grad_accu_step == 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 # 梯度累加
                 optimizer.step()
                 if scheduler is not None:
@@ -191,6 +214,7 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
                    optimizer=optimizer, scheduler=scheduler,
                    valid_loader=valid_groups, valid_infer=None, train_infer=train_infer,
                    extra_module_info=extra_module_info, train_expert_selector=False)
+    clear_write_thread()
     average_loss = train_loss / global_step if global_step > 0 else 0
     best_step, best_step_acc, best_epoch, best_epoch_acc = best_results['best_step'], best_results['best_step_acc'], \
         best_results['best_epoch'], best_results['best_epoch_acc']
@@ -210,8 +234,20 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
                                 test_groups, test_infer=None, train_infer=train_infer,
                                 best_model=best_results[best_key],
                                 extra_module_info=extra_module_info)
+    clear_write_thread()
     if config['train']['continual_method'] == 'ewc':
         generate_grad(config, train_loader, model, tokenizer, loss_sim, tag_to_loss_weight)
+    # write logit to cache
+    if config['train']['continual_method'].startswith('our'):
+        for loader in [train_loader, valid_groups, test_groups]:
+            epoch_iterator = tqdm(loader, desc="logit generation") if len(train_loader) > 20 else train_loader
+            for step, batch in enumerate(epoch_iterator):
+                for key, value in batch.items():
+                    if isinstance(value, torch.Tensor):
+                        batch[key] = value.to(config['device'], non_blocking=True)
+                loss_sim.forward_select_continual_sample(model, tokenizer, batch, write_db=True)
+        clear_write_thread()
+
     with open(os.path.join(exp_path, 'flag'), 'w') as fout:
         fout.write('complete\n')
     return global_step, average_loss, \

@@ -10,7 +10,9 @@ from global_var import GLOBAL
 from loss_similarity import LossSimilarity
 from utils import init_seed, load_json, save_json
 from preprocess import init_type_descriptions, init_contrastive_dataloader
-from kernel import init_tokenizer_model, init_optimizer, train, get_embeddings, update_alignment_model, test
+from kernel import init_tokenizer_model, init_optimizer, train, get_embeddings, update_alignment_model, \
+    test, select_continual_samples
+from global_var import get_epoch_map, get_learning_rate, get_batch_size_map
 
 
 global_cp_path = '../../scy_test/checkpoints'
@@ -21,18 +23,11 @@ sample_num_map = {
     'fewrel': 50,
     'tacred': 20,
     'ace': 20,
-}
-emar_epoch_num_map = {
-    'fewnerd': 10,
-    'ontonotes': 20,
-    'bbn': 20,
-    'fewrel': 10,
-    'tacred': 20,
-    'ace': 20,
+    'chent': 100,
 }
 
 
-def get_emr_replay_frequency(dataset_name: str, sid: int, memory_train_size: int):
+def get_emr_replay_frequency(dataset_name: str, sid: int, memory_train_size: int, big_model: bool):
     if memory_train_size == 0:
         return 1
     training_sample_map = {
@@ -42,15 +37,9 @@ def get_emr_replay_frequency(dataset_name: str, sid: int, memory_train_size: int
         'fewrel': [4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480, 4480],
         'tacred': [651, 341, 2313, 2509, 667, 976, 1083, 248, 1469, 2755],
         'ace': [2507, 1013, 724, 777, 627],
+        'chent': [10516, 4451, 54931, 18106, 11730, 22629, 20031, 28184, 10116, 15190],
     }
-    batch_size_map = {
-        'fewnerd': 16,
-        'ontonotes': 16,
-        'bbn': 16,
-        'fewrel': 16,
-        'tacred': 16,
-        'ace': 16,
-    }
+    batch_size_map = get_batch_size_map(big_model)
     batch_limit_map = {
         'fewnerd': 2500,
         'ontonotes': 1250,
@@ -58,14 +47,16 @@ def get_emr_replay_frequency(dataset_name: str, sid: int, memory_train_size: int
         'fewrel': 400,
         'tacred': 100,
         'ace': 100,
+        'chent': 1250,
     }
     base_old_frequency_map = {
-        'fewnerd': 50,
+        'fewnerd': 10,
         'ontonotes': 10,
         'bbn': 5,
         'fewrel': 5,
         'tacred': 5,
         'ace': 5,
+        'chent': 10,
     }
     batch_limit_train = int(math.ceil(batch_limit_map[dataset_name] * 0.8))
     room_for_old_samples = batch_limit_train * batch_size_map[dataset_name] - \
@@ -81,12 +72,13 @@ def get_emr_replay_frequency(dataset_name: str, sid: int, memory_train_size: int
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset_name', type=str, help='name of the dataset',
-                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace'])
+                        choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', 'chent'])
     parser.add_argument('--start', type=int, help='start split', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'], default='linear')
     parser.add_argument('--global_cp_path', type=str, default='')
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
+    parser.add_argument('--clear', action='store_true', help='clear the history cache_flag and samples')
     parser.add_argument('--device', type=str, help='the device to be used')
     args = parser.parse_args()
 
@@ -104,6 +96,9 @@ def main():
     exp_prefix = method_prefix_map[args.method_type]
     total_parts = config['dataset']['total_parts']
     total_bound = int(total_parts[1:])
+
+    big_model = config['plm']['model_name'] in ['llama', 'cpm']
+    emar_epoch_num_map = get_epoch_map(big_model)
 
     # set the config entries
     config['type_checkpoint'] = config['grad_checkpoint'] = \
@@ -125,17 +120,34 @@ def main():
     config['is_eaemr'] = True
     config['device'] = args.device
 
+    if args.clear:
+        for idx in range(args.start, total_bound + 1):
+            exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
+                       f'lora4_mk00_p{idx}{cycle_suffix}'
+            wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                        f'_p{idx}{cycle_suffix}.json'
+            cache_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
+            if args.clear and os.path.exists(wait_file):
+                os.remove(wait_file)
+            if args.clear and os.path.exists(cache_flag_path):
+                os.remove(cache_flag_path)
+
     tokenizer, model = init_tokenizer_model(config)
     init_type_descriptions(config)
     # init_contrastive_dataset
     ori_dataset = {}
     for part in ['train', 'valid', 'test']:
         ori_dataset[part] = load_json(f'data/{args.dataset_name}/{args.dataset_name}_split_{part}_'
-                                      f'dataset_{total_parts}_mask.json')
-        new_dataset = []
-        for sid, data in enumerate(ori_dataset[part]):
-            new_dataset.append([(f'{part}_{sid}_{idx}', sample) for idx, sample in enumerate(data)])
-        ori_dataset[part] = new_dataset
+                                      f'dataset_{total_parts}_key.json')
+        if part == 'train':
+            for ds_id in range(len(ori_dataset[part])):
+                new_dataset = []
+                for sample_key, tag, text in ori_dataset[part][ds_id]:
+                    pos = text.find(' In this sentence,')
+                    if len(text[pos + 1:].split(' ')) > 50:
+                        continue
+                    new_dataset.append((sample_key, tag, text))
+                ori_dataset[part][ds_id] = new_dataset
     label_num = len(GLOBAL['continual_tag_to_split'])
     config['label_num'], config['vocab_size'], config['hidden_size'] = \
         label_num, len(tokenizer), model.config.hidden_size
@@ -172,10 +184,15 @@ def main():
         if any('lora_alignment' in name for name in params.keys()):
             model.init_alignment()
         model.load_state_dict(params, strict=False)
+    if args.start > 1:
+        exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
+                   f'lora4_mk00_p{args.start-1}{cycle_suffix}'
+        mem_embeddings = torch.load(os.path.join(exp_path, 'save_embeds.pkl'))
 
     for idx in range(args.start, total_bound + 1):
         cur_split = f'p{idx}'
         loss_sim.curr_bound = idx
+        config['plm']['optimize']['lr'] = get_learning_rate(big_model, args.dataset_name, idx, 'eaemr')
         config['dataset']['special_part'] = cur_split
         config['dataset']['extra_special_part'] = ','.join([f'p{sid}' for sid in range(1, idx)])
         exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
@@ -200,7 +217,7 @@ def main():
         accu_test_data += ori_dataset['test'][idx-1]
         cur_train_data, cur_valid_data = ori_dataset['train'][idx-1], ori_dataset['valid'][idx-1]
         combined_train_set = copy.deepcopy(cur_train_data)
-        replay_frequency = get_emr_replay_frequency(args.dataset_name, idx, len(mem_train_data))
+        replay_frequency = get_emr_replay_frequency(args.dataset_name, idx, len(mem_train_data), big_model)
         for _ in range(replay_frequency):
             combined_train_set += mem_train_data
         datasets = {
@@ -224,6 +241,15 @@ def main():
         # II. sample selection
         wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
                     f'_p{idx}{cycle_suffix}.json'
+        cache_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
+        if big_model and not os.path.exists(wait_file):
+            # for big models, compute logits locally
+            select_dataset = {'train_infer': cur_train_data}
+            select_loader, _ = init_contrastive_dataloader(config, select_dataset, tokenizer)
+            select_continual_samples(config, select_loader, model, tokenizer, loss_sim)
+            with open(cache_flag_path, 'w') as fout:
+                fout.write('cache complete\n')
+
         print('waiting for ', wait_file, '.' * 30)
         while True:
             if os.path.exists(wait_file):
@@ -238,7 +264,7 @@ def main():
         mem_valid_data += selected_samples['valid_groups']
         loss_sim.continual_logit_cache.clear()
 
-        tmp_embedding_map = get_embeddings(config, selected_samples['train_infer'], model, tokenizer, False)
+        tmp_embedding_map = get_embeddings(config, selected_samples['train_infer'], model, tokenizer, loss_sim, False)
         mem_embeddings.update(tmp_embedding_map)
 
         # evaluation
@@ -251,12 +277,12 @@ def main():
         prev_sequence_results.append(test_results)
 
         # III. update alignment module
-        cur_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, True)
+        cur_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, loss_sim, True)
         assert cur_embeddings.keys() == mem_embeddings.keys()
         model.init_alignment()
         update_alignment_model(config, cur_embeddings, mem_embeddings, model.lora_alignment)
 
-        mem_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, False)
+        mem_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, loss_sim, False)
 
         """
         test_by_best(config, model, tokenizer, loss_sim,
@@ -276,6 +302,7 @@ def main():
         print(sequence_results[-1])
         save_json(prev_sequence_results, os.path.join(exp_path, 'prev_sequence_results.json'))
         save_json(sequence_results, os.path.join(exp_path, 'sequence_results.json'))
+        torch.save(mem_embeddings, os.path.join(exp_path, 'save_embeds.pkl'))
 
 
 if __name__ == '__main__':

@@ -11,7 +11,7 @@ from models import BertLoRAWithSelector, mark_only_adapter_as_trainable
 
 
 @torch.no_grad()
-def get_prototypes(config, proto_memory, model, tokenizer):
+def get_prototypes(config, proto_memory, model, tokenizer, loss_sim: LossSimilarity):
     memset, rangeset = [], [0]
     for data in proto_memory:
         memset += data
@@ -23,9 +23,8 @@ def get_prototypes(config, proto_memory, model, tokenizer):
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(config['device'], non_blocking=True)
         hidden_mask = batch['input_ids'] == tokenizer.mask_token_id
-        feature = model(
-            input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
-            output_hidden_states=True, return_dict=True)['hidden_states'][-1][hidden_mask]
+        feature = loss_sim.forward_model_logits(
+            '', model.lora_projector, batch, model, hidden_mask, is_selector=False)[1]
         features.append(feature.detach().cpu())
     features = torch.cat(features, dim=0)
     prototypes, hidden_size = [], config['hidden_size']
@@ -74,7 +73,7 @@ def train_emar(config, data_loaders1, data_loaders2, model, tokenizer, loss_sim:
         print('loaded best results:', str(best_results))
     train_loss = 0.0
     model.zero_grad()
-    if config['train']['save_option'] >= 1:
+    if config['train']['save_option'] >= 1 and config['plm']['model_name'] != 'cpm':
         tokenizer.save_pretrained(model_path)
 
     train_tag_set = list(get_tag_set_by_dataset(train_loader1))
@@ -84,7 +83,7 @@ def train_emar(config, data_loaders1, data_loaders2, model, tokenizer, loss_sim:
     for epoch in range(trained_epoch, int(num_epoch) + trained_epoch):  # ALERT: different!
 
         # I. get current prototypes
-        cur_prototypes = get_prototypes(config, proto_memory, model, tokenizer)
+        cur_prototypes = get_prototypes(config, proto_memory, model, tokenizer, loss_sim)
 
         # II. train_simple_model
         epoch_iterator1 = tqdm(train_loader1, desc="data iteration 1") if len(train_loader1) > 20 else train_loader1
@@ -173,7 +172,7 @@ def train_emar(config, data_loaders1, data_loaders2, model, tokenizer, loss_sim:
     else:
         best_key = 'step-model'
         shutil.copy(os.path.join(model_path, 'step-best.pkl'), os.path.join(model_path, 'tot-best.pkl'))
-    cur_prototypes = get_prototypes(config, proto_memory, model, tokenizer)
+    cur_prototypes = get_prototypes(config, proto_memory, model, tokenizer, loss_sim)
     test_results = test_by_best(config, model, tokenizer, loss_sim,
                                 best_epoch, best_epoch_acc, best_step, best_step_acc,
                                 test_groups1, test_infer=None, train_infer=train_infer1,

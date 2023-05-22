@@ -1,11 +1,14 @@
 import os
 import torch
+import loralib as lora
 from utils import load_json
 from torch.optim import AdamW
 from loss_similarity import LossSimilarity
-from models import BertForMaskedLMLoRA, BertLoRAWithSelector
+from bmt_models import CPMBeeTokenizer
+from global_var import GLOBAL
+from models import BertForMaskedLMLoRA, BertLoRAWithSelector, CPMLoRAWithSelector, LlamaLoRAWithSelector
 from transformers.optimization import get_linear_schedule_with_warmup
-from transformers import T5Tokenizer, T5ForConditionalGeneration, AutoTokenizer, AutoModelForMaskedLM
+from transformers import T5Tokenizer, T5ForConditionalGeneration, AutoTokenizer, AutoModelForMaskedLM, LlamaForCausalLM
 
 
 def init_tokenizer_model(config):
@@ -13,31 +16,33 @@ def init_tokenizer_model(config):
     max_seq_len = config['dataloader']['max_seq_length']
     dataset_name = config['dataset']['dataset_name']
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+    use_expert_selector = config['train']['train_expert_selector'] > 0 or config['train']['use_expert_selector']
+    use_expert_selector &= config['train']['continual_method'].startswith('our')
+    if config['dataset']['method_type'] == 'linear':
+        split_to_tags = load_json(f'scripts/{dataset_name}_class_split_'
+                                  f'{config["dataset"]["total_parts"]}_tags.json')
+        if config['train']['continual_method'].startswith('our'):
+            linear_dim = len(split_to_tags[config['dataset']['special_part']])
+            linear_dim_exp = int(config['dataset']['special_part'][1:])
+        else:
+            assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr', 'emr_abl']
+            num_labels = sum(len(tags) for split, tags in split_to_tags.items() if split != 'all')
+            linear_dim = num_labels
+            linear_dim_exp = -1
+    else:
+        linear_dim = linear_dim_exp = -1
     if model_name == 't5':
         tokenizer = T5Tokenizer.from_pretrained(model_path, model_max_length=max_seq_len)
         model = T5ForConditionalGeneration.from_pretrained(model_path).to(config['device'])
         model.config.max_length = max_seq_len
     elif model_name in ['bert', 'roberta']:
         tokenizer = AutoTokenizer.from_pretrained(model_path, model_max_length=max_seq_len)
-        tokenizer.add_special_tokens({"additional_special_tokens": [f"[unused{idx}]" for idx in range(5)]})
-        assert all(len(tokenizer.tokenize(f"[unused{idx}]")) == 1 for idx in range(5))
+        unused_range = range(1, 6) if model_path.startswith('hfl/') else range(5)
+        tokenizer.add_special_tokens({"additional_special_tokens": [f"[unused{idx}]" for idx in unused_range]})
+        assert all(len(tokenizer.tokenize(f"[unused{idx}]")) == 1 for idx in unused_range)
 
         assert not (config['plm']['apply_lora'] and config['plm']['apply_adapter'])
-        use_expert_selector = config['train']['train_expert_selector'] > 0 or config['train']['use_expert_selector']
-        use_expert_selector &= config['train']['continual_method'].startswith('our')
-        if config['dataset']['method_type'] == 'linear':
-            split_to_tags = load_json(f'scripts/{dataset_name}_class_split_'
-                                      f'{config["dataset"]["total_parts"]}_tags.json')
-            if config['train']['continual_method'].startswith('our'):
-                linear_dim = len(split_to_tags[config['dataset']['special_part']])
-                linear_dim_exp = int(config['dataset']['special_part'][1:])
-            else:
-                assert config['train']['continual_method'] in ['ewc', 'lwf', 'emr', 'emr_abl']
-                num_labels = sum(len(tags) for split, tags in split_to_tags.items() if split != 'all')
-                linear_dim = num_labels
-                linear_dim_exp = -1
-        else:
-            linear_dim = linear_dim_exp = -1
         if use_expert_selector:
             model = BertLoRAWithSelector(config, with_selector=True, linear_dim=linear_dim,
                                          linear_dim_exp=linear_dim_exp).to(config['device'])
@@ -51,6 +56,54 @@ def init_tokenizer_model(config):
             err_msg = model.load_selector_state_dict(model_state, strict=False)
             assert len(err_msg.unexpected_keys) == 0 and \
                    all('lora' not in key for key in err_msg.missing_keys)
+    elif model_name == 'cpm':
+        tokenizer = CPMBeeTokenizer()
+        assert all(len(tokenizer.tokenize(f"<unused{idx}>")) == 1 for idx in range(5))
+        assert config['plm']['apply_lora']
+        model_state = torch.load(config['plm']['model_path'], map_location='cpu')
+        model = CPMLoRAWithSelector(config, is_infer=False, with_selector=use_expert_selector, linear_dim=linear_dim,
+                                    linear_dim_exp=linear_dim_exp, model_state=model_state).to(config['device'])
+        if use_expert_selector and config['select_checkpoint']:
+            assert isinstance(model, CPMLoRAWithSelector)
+            print('loading expert selector from:', config['select_checkpoint'])
+            sel_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
+            model.load_selector_state_dict(sel_state)
+        lora.mark_only_lora_as_trainable(model)
+        if config['train']['continual_method'].startswith('our'):
+            infer_model = CPMLoRAWithSelector(
+                config, is_infer=True, with_selector=use_expert_selector, linear_dim=-1,
+                linear_dim_exp=-1, model_state=model_state).to(config['infer_device'])
+            infer_model.zero_grad()
+            infer_model.eval()
+            GLOBAL['infer_model'] = infer_model
+    elif model_name == 'llama':
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer.unk_token, tokenizer.unk_token_id = '<unk>', 0
+        tokenizer.pad_token, tokenizer.pad_token_id = '<unk>', 0
+        tokenizer.bos_token, tokenizer.eos_token, tokenizer.mask_token = '<s>', '</s>', '<0x05>'
+        tokenizer.padding_side = 'right'
+        tokenizer.add_special_tokens({"additional_special_tokens": [
+            '<s>', '</s>', '<unk>'] + [f'<0x{idx:02}>' for idx in range(6)]})
+        assert all(len(tokenizer.tokenize(f"<0x{idx:02}>")) == 1 for idx in range(6))
+        assert config['plm']['apply_lora']
+        model = LlamaForCausalLM.from_pretrained(model_path)
+        model_state = model.state_dict()
+        del model
+        model = LlamaLoRAWithSelector(config, is_infer=False, with_selector=use_expert_selector, linear_dim=linear_dim,
+                                      linear_dim_exp=linear_dim_exp, model_state=model_state).to(config['device'])
+        model = model.to(dtype=torch.half)
+        if use_expert_selector and config['select_checkpoint']:
+            print('loading expert selector from:', config['select_checkpoint'])
+            sel_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
+            model.load_selector_state_dict(sel_state)
+        lora.mark_only_lora_as_trainable(model)
+        if config['train']['continual_method'].startswith('our'):
+            infer_model = LlamaLoRAWithSelector(
+                config, is_infer=True, with_selector=use_expert_selector, linear_dim=-1,
+                linear_dim_exp=-1, model_state=model_state).to(config['infer_device']).to(dtype=torch.half)
+            infer_model.zero_grad()
+            infer_model.eval()
+            GLOBAL['infer_model'] = infer_model
     else:
         raise NotImplementedError(f'invalid model name {model_name}')
     return tokenizer, model
@@ -59,7 +112,8 @@ def init_tokenizer_model(config):
 def init_optimizer(config, model, data_len):
     opt_config = config['plm']['optimize']
     optimizer = AdamW([param for param in model.parameters() if param.requires_grad],
-                      lr=opt_config['lr'], weight_decay=opt_config['weight_decay'])
+                      lr=opt_config['lr'], weight_decay=opt_config['weight_decay'],
+                      betas=(opt_config['beta1'], opt_config['beta2']), eps=opt_config['adam_eps'])
     scheduler = None
     if 'scheduler' in opt_config:
         num_training_steps = data_len * config['train']['num_epochs'] // config['train']['gradient_accumulation_steps']

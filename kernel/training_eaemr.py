@@ -1,11 +1,12 @@
 import torch
 import random
 from tqdm import tqdm, trange
+from loss_similarity import LossSimilarity
 from preprocess import init_contrastive_dataloader
 
 
 @torch.no_grad()
-def get_embeddings(config, memorized_samples, model, tokenizer, before_reverse=False):
+def get_embeddings(config, memorized_samples, model, tokenizer, loss_sim: LossSimilarity, before_reverse=False):
     data_loader = init_contrastive_dataloader(config, {'train': [], 'test': memorized_samples}, tokenizer)[0]['test']
     features = {}
     backup_alignment = model.lora_alignment
@@ -16,9 +17,9 @@ def get_embeddings(config, memorized_samples, model, tokenizer, before_reverse=F
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(config['device'], non_blocking=True)
         hidden_mask = batch['input_ids'] == tokenizer.mask_token_id
-        feature = model(
-            input_ids=batch['input_ids'], attention_mask=batch['attention_mask'],
-            output_hidden_states=True, return_dict=True)['hidden_states'][-1][hidden_mask].detach().cpu()
+        feature = loss_sim.forward_model_logits(
+            '', model.lora_projector, batch, model, hidden_mask, is_selector=False)[1]
+        feature = feature.detach().cpu()
         assert len(feature) == len(batch['sample_keys'])
         for fea, sample_key in zip(feature, batch['sample_keys']):
             features[sample_key] = fea
