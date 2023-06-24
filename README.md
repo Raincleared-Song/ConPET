@@ -1,2 +1,2 @@
-# P-PET
-Source code for *P-PET: Progressive Parameter-Efficient Tuning for Continual Knowledge Extraction with Constant Training Costs*.
+# ConPET
+Source code for *ConPET: Continual Parameter-Efficient Tuning for Large Language Models*.
