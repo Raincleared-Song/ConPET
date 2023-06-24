@@ -3,6 +3,7 @@ import torch.nn as nn
 import loralib as lora
 from transformers import AutoModelForMaskedLM
 from .bert_lora import BertForMaskedLMLoRA, BertLoRAConfig
+from .adapter import adapter_lora_state_dict
 
 
 class BertLoRAWithSelector(nn.Module):
@@ -28,8 +29,12 @@ class BertLoRAWithSelector(nn.Module):
             self.lora_linear_out = nn.Linear(self.bert_lora.config.hidden_size, linear_dim)
         if with_selector:
             self.bert_selector = BertForMaskedLMLoRA(self.config)
-            selector_dict = lora.lora_state_dict(self.bert_selector) if config_dict['apply_lora'] \
-                else self.bert_selector.state_dict()
+            if config_dict['apply_lora']:
+                selector_dict = lora.lora_state_dict(self.bert_selector)
+            elif config_dict['apply_adapter']:
+                selector_dict = adapter_lora_state_dict(self.bert_selector)
+            else:
+                selector_dict = self.bert_selector.state_dict()
             self.selector_dict = copy.deepcopy(selector_dict)
             self.linear_dim_exp = linear_dim_exp
             if linear_dim_exp > 0:
@@ -37,9 +42,9 @@ class BertLoRAWithSelector(nn.Module):
 
         err_msg_lora, err_msg_exp = self.load_both_state_dict(state_dict, strict=False)
         assert len(err_msg_lora.unexpected_keys) == 0 and \
-               all('lora' in key for key in err_msg_lora.missing_keys)
+               all('lora' in key or 'adapter' in key for key in err_msg_lora.missing_keys)
         assert err_msg_exp is None or len(err_msg_exp.unexpected_keys) == 0 and \
-               all('lora' in key for key in err_msg_exp.missing_keys)
+               all('lora' in key or 'adapter' in key for key in err_msg_exp.missing_keys)
 
         self.lora_alignment = None
 

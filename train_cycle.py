@@ -130,6 +130,7 @@ def main():
     parser.add_argument('--continual_method', type=str, choices=['our', 'ewc', 'lwf',
                                                                  'emr', 'emr_abl', 'our_abl', 'our_sim_pro'])
     parser.add_argument('--not_apply_lora', action='store_true')
+    parser.add_argument('--apply_adapter', action='store_true')
     parser.add_argument('--wait', type=str, default='')
     parser.add_argument('--global_cp_path', type=str, default='')
     parser.add_argument('--loss_adverse_step', type=int, default=-1)
@@ -179,7 +180,8 @@ def main():
     print('resetting database ......')
     reset_database(f'databases/{args.dataset_name}_{args.cycle_suffix}.db', args.start, total_bound + 1)
 
-    if args.clear and args.continual_method in ['emr', 'our_abl']:
+    use_selected = args.continual_method in ['emr', 'our_abl'] and args.batch_limit_policy == 0
+    if args.clear and use_selected:
         for idx in range(args.start, total_bound + 1):
             exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                        f'lora4_mk00_p{idx}{cycle_suffix}'
@@ -194,7 +196,8 @@ def main():
     for idx in range(args.start, total_bound + 1):
         cur_split = f'p{idx}'
         config_base['train']['continual_method'] = args.continual_method
-        config_base['plm']['apply_lora'] = not args.not_apply_lora
+        config_base['plm']['apply_lora'] = not args.not_apply_lora and not args.apply_adapter
+        config_base['plm']['apply_adapter'] = args.apply_adapter
         config_base['dataset']['method_type'] = args.method_type
         config_base['dataset']['special_part'] = cur_split
         if args.continual_method.startswith('emr'):
@@ -226,18 +229,18 @@ def main():
         config_base['dataset']['batch_limit'] = args.batch_limit
         config_base['dataset']['batch_new_old_ratio'] = args.batch_new_old_ratio
         config_base['dataset']['seed'] = config_base['reproduce']['seed'] = args.seed
-        config_base['dataset']['use_selected'] = args.continual_method in ['emr', 'our_abl']
+        config_base['dataset']['use_selected'] = use_selected
         config_base['train']['num_epochs'] = epoch_num_map[args.dataset_name]
         config_base['plm']['optimize']['lr'] = get_learning_rate(
-            big_model, args.dataset_name, idx, args.continual_method)
-        if args.continual_method in ['emr', 'our_abl'] and idx >= 2:
+            big_model, args.dataset_name, idx, args.continual_method, is_adapter=args.apply_adapter)
+        if use_selected and idx >= 2:
             config_base['dataset']['replay_frequency'] = get_emr_replay_frequency(args.dataset_name, idx, big_model)
         with open(f'configs/{args.dataset_name}_continual_typing{cycle_suffix}.yaml', 'w', encoding='utf-8') as fout:
             yaml.dump(config_base, fout)
         print(cur_split, config_base)
         print('=' * 30)
 
-        if args.continual_method in ['emr', 'our_abl'] and idx >= 2:
+        if use_selected and idx >= 2:
             assert config_base['dataset']['use_selected'] and config_base['dataset']['batch_limit_policy'] == 0
             wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
                         f'_p{idx - 1}{cycle_suffix}.json'

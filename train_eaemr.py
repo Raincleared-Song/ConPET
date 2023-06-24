@@ -9,7 +9,7 @@ import argparse
 from global_var import GLOBAL
 from loss_similarity import LossSimilarity
 from utils import init_seed, load_json, save_json
-from preprocess import init_type_descriptions, init_contrastive_dataloader
+from preprocess import init_type_descriptions, init_contrastive_dataloader, init_contrastive_dataset
 from kernel import init_tokenizer_model, init_optimizer, train, get_embeddings, update_alignment_model, \
     test, select_continual_samples
 from global_var import get_epoch_map, get_learning_rate, get_batch_size_map
@@ -76,6 +76,10 @@ def main():
     parser.add_argument('--start', type=int, help='start split', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'], default='linear')
+    parser.add_argument('--batch_limit_policy', type=int, help='batch limit policy', default=0)
+    parser.add_argument('--batch_limit', type=int, help='batch sample limit', default=1000)
+    parser.add_argument('--not_apply_lora', action='store_true')
+    parser.add_argument('--apply_adapter', action='store_true')
     parser.add_argument('--global_cp_path', type=str, default='')
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
     parser.add_argument('--clear', action='store_true', help='clear the history cache_flag and samples')
@@ -101,11 +105,14 @@ def main():
     emar_epoch_num_map = get_epoch_map(big_model)
 
     # set the config entries
+    use_selected = args.batch_limit_policy == 0
     config['type_checkpoint'] = config['grad_checkpoint'] = \
         config['select_checkpoint'] = config['checkpoint'] = ''
     config['is_test'] = config['generate_grad'] = \
         config['generate_logit'] = config['select_sample'] = False
     config['train']['continual_method'] = 'emr'  # to be checked
+    config['plm']['apply_lora'] = not args.not_apply_lora and not args.apply_adapter
+    config['plm']['apply_adapter'] = args.apply_adapter
     config['dataset']['method_type'] = args.method_type
     config['logging']['cycle_suffix'] = args.cycle_suffix
     config['logging']['path_base'] = global_cp_path
@@ -113,14 +120,15 @@ def main():
     config['train']['use_expert_selector'] = False
     config['train']['num_epochs'] = emar_epoch_num_map[args.dataset_name]
     config['train']['save_step'] = -1
-    config['dataset']['batch_limit_policy'] = 0
+    config['dataset']['batch_limit_policy'] = args.batch_limit_policy
+    config['dataset']['batch_limit'] = args.batch_limit
     config['dataset']['seed'] = config['reproduce']['seed'] = args.seed
-    config['dataset']['use_selected'] = True
+    config['dataset']['use_selected'] = use_selected
     config['sample_num'] = sample_num_map[args.dataset_name]
     config['is_eaemr'] = True
     config['device'] = args.device
 
-    if args.clear:
+    if use_selected and args.clear:
         for idx in range(args.start, total_bound + 1):
             exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                        f'lora4_mk00_p{idx}{cycle_suffix}'
@@ -160,6 +168,7 @@ def main():
     mem_train_data, mem_valid_data = [], []
     accu_test_data = []
     mem_embeddings = {}
+    split_to_tags = GLOBAL['continual_split_to_tags']
 
     for idx in range(1, args.start):
         cur_split = f'p{idx}'
@@ -171,12 +180,13 @@ def main():
         sequence_results = load_json(result_path)
         prev_sequence_results = load_json(os.path.join(exp_path, 'prev_sequence_results.json'))
 
-        wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
-                    f'_p{idx}{cycle_suffix}.json'
-        selected_samples = load_json(wait_file)
-        # selected_samples = select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
-        mem_train_data += selected_samples['train_infer']
-        mem_valid_data += selected_samples['valid_groups']
+        if use_selected:
+            wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                        f'_p{idx}{cycle_suffix}.json'
+            selected_samples = load_json(wait_file)
+            # selected_samples = select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
+            mem_train_data += selected_samples['train_infer']
+            mem_valid_data += selected_samples['valid_groups']
         accu_test_data += ori_dataset['test'][idx - 1]
 
         model_path = os.path.join(exp_path, 'models', 'tot-best.pkl')
@@ -187,7 +197,7 @@ def main():
     if args.start > 1:
         exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                    f'lora4_mk00_p{args.start-1}{cycle_suffix}'
-        mem_embeddings = torch.load(os.path.join(exp_path, 'save_embeds.pkl'))
+        mem_embeddings = torch.load(os.path.join(global_cp_path, exp_path, 'save_embeds.pkl'))
 
     for idx in range(args.start, total_bound + 1):
         cur_split = f'p{idx}'
@@ -216,18 +226,27 @@ def main():
         # prepare_dataloader
         accu_test_data += ori_dataset['test'][idx-1]
         cur_train_data, cur_valid_data = ori_dataset['train'][idx-1], ori_dataset['valid'][idx-1]
-        combined_train_set = copy.deepcopy(cur_train_data)
-        replay_frequency = get_emr_replay_frequency(args.dataset_name, idx, len(mem_train_data), big_model)
-        for _ in range(replay_frequency):
-            combined_train_set += mem_train_data
-        datasets = {
-            'train': [],
-            'train_infer': combined_train_set,
-            'valid_groups': cur_valid_data + mem_valid_data,
-            'test_groups': accu_test_data,
-        }
+        if use_selected:
+            combined_train_set = copy.deepcopy(cur_train_data)
+            replay_frequency = get_emr_replay_frequency(args.dataset_name, idx, len(mem_train_data), big_model)
+            for _ in range(replay_frequency):
+                combined_train_set += mem_train_data
+            datasets = {
+                'train': [],
+                'train_infer': combined_train_set,
+                'valid_groups': cur_valid_data + mem_valid_data,
+                'test_groups': accu_test_data,
+            }
+        else:
+            datasets, _ = init_contrastive_dataset(config, type_splits=[])
         data_loaders, cur_train_sz = init_contrastive_dataloader(config, datasets, tokenizer)
 
+        if not use_selected:
+            # backup the embeddings generated by the original model
+            mem_embeddings = {}
+            for _ in range(config['train']['num_epochs']):
+                mem_embeddings.update(get_embeddings(config, data_loaders, model, tokenizer, loss_sim, False))
+                print('length of mem_embeddings:', len(mem_embeddings))
         # I. fine-tuning
         trained_epochs, global_steps = 0, 0
         global_steps, average_loss, best_step, best_step_acc, best_epoch, best_epoch_acc, best_results, test_results \
@@ -238,35 +257,6 @@ def main():
         print('best epoch:', best_epoch, 'best epoch acc:', best_epoch_acc)
         print('fine-tuning test results:', test_results)
 
-        # II. sample selection
-        wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
-                    f'_p{idx}{cycle_suffix}.json'
-        cache_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
-        if big_model and not os.path.exists(wait_file):
-            # for big models, compute logits locally
-            select_dataset = {'train_infer': cur_train_data}
-            select_loader, _ = init_contrastive_dataloader(config, select_dataset, tokenizer)
-            select_continual_samples(config, select_loader, model, tokenizer, loss_sim)
-            with open(cache_flag_path, 'w') as fout:
-                fout.write('cache complete\n')
-
-        print('waiting for ', wait_file, '.' * 30)
-        while True:
-            if os.path.exists(wait_file):
-                print()
-                break
-            time.sleep(60)
-        print('=' * 30)
-
-        # III. get sample embeddings
-        selected_samples = load_json(wait_file)
-        mem_train_data += selected_samples['train_infer']
-        mem_valid_data += selected_samples['valid_groups']
-        loss_sim.continual_logit_cache.clear()
-
-        tmp_embedding_map = get_embeddings(config, selected_samples['train_infer'], model, tokenizer, loss_sim, False)
-        mem_embeddings.update(tmp_embedding_map)
-
         # evaluation
         test_output_path = os.path.join(exp_path, 'test')
         prefix = f'{"epoch" if best_epoch_acc > best_step_acc else "step"}-best'
@@ -276,21 +266,63 @@ def main():
         print('prev test results:', test_results)
         prev_sequence_results.append(test_results)
 
-        # III. update alignment module
-        cur_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, loss_sim, True)
-        assert cur_embeddings.keys() == mem_embeddings.keys()
-        model.init_alignment()
-        update_alignment_model(config, cur_embeddings, mem_embeddings, model.lora_alignment)
+        # II. sample selection
+        if use_selected:
+            wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                        f'_p{idx}{cycle_suffix}.json'
+            cache_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
+            if big_model and not os.path.exists(wait_file):
+                # for big models, compute logits locally
+                select_dataset = {'train_infer': cur_train_data}
+                select_loader, _ = init_contrastive_dataloader(config, select_dataset, tokenizer)
+                select_continual_samples(config, select_loader, model, tokenizer, loss_sim)
+                with open(cache_flag_path, 'w') as fout:
+                    fout.write('cache complete\n')
 
-        mem_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, loss_sim, False)
+            print('waiting for ', wait_file, '.' * 30)
+            while True:
+                if os.path.exists(wait_file):
+                    print()
+                    break
+                time.sleep(60)
+            print('=' * 30)
 
-        """
-        test_by_best(config, model, tokenizer, loss_sim,
-                                best_epoch, best_epoch_acc, best_step, best_step_acc,
-                                test_groups1, test_infer=None, train_infer=train_infer1,
-                                best_model=best_results[best_key],
-                                extra_module_info=None, prototypes=cur_prototypes)
-        """
+            # III. get sample embeddings
+            selected_samples = load_json(wait_file)
+            mem_train_data += selected_samples['train_infer']
+            mem_valid_data += selected_samples['valid_groups']
+            loss_sim.continual_logit_cache.clear()
+
+            tmp_embedding_map = get_embeddings(
+                config, selected_samples['train_infer'], model, tokenizer, loss_sim, False)
+            mem_embeddings.update(tmp_embedding_map)
+
+            # IV. update alignment module
+            cur_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, loss_sim, True)
+            assert cur_embeddings.keys() == mem_embeddings.keys()
+            model.init_alignment()
+            update_alignment_model(config, cur_embeddings, mem_embeddings, model.lora_alignment)
+
+            mem_embeddings = get_embeddings(config, mem_train_data, model, tokenizer, loss_sim, False)
+        else:
+            # III. get sample embeddings
+            cur_embeddings, key2tags = {}, {}
+            for _ in range(config['train']['num_epochs']):
+                tmp_embeddings, tmp_tags = get_embeddings(
+                    config, data_loaders, model, tokenizer, loss_sim, True, return_tags=True)
+                cur_embeddings.update(tmp_embeddings)
+                key2tags.update(tmp_tags)
+                print('length of cur_embeddings:', len(cur_embeddings))
+            assert cur_embeddings.keys() == mem_embeddings.keys() == key2tags.keys()
+            # change the sample embeddings for the new categories
+            cur_tags = split_to_tags[cur_split]
+            for key, tag in key2tags.items():
+                if tag in cur_tags:
+                    mem_embeddings[key] = cur_embeddings[key]
+            # IV. update alignment module
+            model.init_alignment()
+            update_alignment_model(config, cur_embeddings, mem_embeddings, model.lora_alignment)
+
         # evaluation
         test_results = test(config, data_loaders['test_groups'], None, model, tokenizer, loss_sim, 'test',
                             test_output_path, is_step='step' in prefix, epoch=p_epoch, step=p_step)[0]

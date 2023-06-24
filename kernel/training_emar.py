@@ -7,7 +7,7 @@ from loss_similarity import LossSimilarity
 from .testing import valid_save, test_by_best
 from preprocess import get_tag_set_by_dataset
 from preprocess import init_contrastive_dataloader
-from models import BertLoRAWithSelector, mark_only_adapter_as_trainable
+from models import BertLoRAWithSelector, mark_only_adapter_lora_as_trainable
 
 
 @torch.no_grad()
@@ -96,7 +96,7 @@ def train_emar(config, data_loaders1, data_loaders2, model, tokenizer, loss_sim:
             if config['plm']['apply_lora']:
                 lora.mark_only_lora_as_trainable(model)
             elif config['plm']['apply_adapter']:
-                mark_only_adapter_as_trainable(model)
+                mark_only_adapter_lora_as_trainable(model)
 
             try:
                 loss, loss_vec = loss_sim.forward_similarity_train(model, tokenizer, batch,
@@ -131,7 +131,7 @@ def train_emar(config, data_loaders1, data_loaders2, model, tokenizer, loss_sim:
             if config['plm']['apply_lora']:
                 lora.mark_only_lora_as_trainable(model)
             elif config['plm']['apply_adapter']:
-                mark_only_adapter_as_trainable(model)
+                mark_only_adapter_lora_as_trainable(model)
 
             try:
                 loss, loss_vec = loss_sim.forward_similarity_train(model, tokenizer, batch,

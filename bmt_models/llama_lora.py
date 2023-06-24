@@ -26,6 +26,7 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 import loralib as lora
+from models.adapter import Adapter
 
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
@@ -105,6 +106,9 @@ class LlamaConfigLoRA(PretrainedConfig):
         tie_word_embeddings=False,
         apply_lora=False,
         lora_r=4,
+        apply_adapter=False,
+        adapter_size=None,
+        adapter_type=None,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -118,6 +122,9 @@ class LlamaConfigLoRA(PretrainedConfig):
         self.use_cache = use_cache
         self.apply_lora = apply_lora
         self.lora_r = lora_r
+        self.apply_adapter = apply_adapter
+        self.adapter_size = adapter_size
+        self.adapter_type = adapter_type
         super().__init__(
             pad_token_id=pad_token_id,
             bos_token_id=bos_token_id,
@@ -374,6 +381,12 @@ class LlamaDecoderLayer(nn.Module):
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
+        if config.apply_adapter:
+            if config.adapter_type == 'houlsby':
+                self.attn_adapter = Adapter(config.hidden_size, config.adapter_size, 'swish')
+            self.mlp_adapter = Adapter(config.hidden_size, config.adapter_size,
+                                       'swish' if config.adapter_type == 'houlsby' else 'relu')
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -410,13 +423,19 @@ class LlamaDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
-        hidden_states = residual + hidden_states
+        if hasattr(self, 'attn_adapter'):
+            hidden_states = self.attn_adapter(hidden_states, residual=residual)
+        else:
+            hidden_states = residual + hidden_states
 
         # Fully Connected
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
+        if hasattr(self, 'mlp_adapter'):
+            hidden_states = self.mlp_adapter(hidden_states, residual=residual)
+        else:
+            hidden_states = residual + hidden_states
 
         outputs = (hidden_states,)
 

@@ -29,10 +29,10 @@ class data_set(Dataset):
 
         mask_ids = [token == self.config.mask_token_id for token in tokens]
         assert all(torch.sum(mask_id) == 1 for mask_id in mask_ids)
-        ind = torch.IntTensor([item[1] for item in data])
+        ind = torch.LongTensor([item[1] for item in data])
         assert len(labels) == len(tokens) == len(mask_ids) == len(ind)
         tokens, attention_mask = torch.stack(tokens, dim=0), torch.stack(attention_mask, dim=0)
-        mask_ids = torch.stack(mask_ids, dim=0).to(dtype=torch.int)
+        mask_ids = torch.stack(mask_ids, dim=0).to(dtype=torch.bool)
         return labels, tokens, attention_mask, mask_ids, ind
 
 

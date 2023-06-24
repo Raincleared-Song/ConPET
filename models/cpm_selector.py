@@ -27,7 +27,7 @@ class CPMLoRAWithSelector(nn.Module):
             model_state = torch.load(config['plm']['model_path'], map_location='cpu')
         self.resize_token_embeddings(model_state)
         err_msg = self.backbone.load_state_dict(model_state, strict=False)
-        assert len(err_msg.unexpected_keys) == 0 and all('lora' in key for key in err_msg.missing_keys)
+        assert len(err_msg.unexpected_keys) == 0 and all('lora' in key or 'adapter' in key for key in err_msg.missing_keys)
 
         # self.delta_model = LoraModel(backbone_model=self.backbone, lora_r=config['plm']['lora_r'],
         #                              modified_modules=['project_q', 'project_v'])
@@ -66,7 +66,7 @@ class CPMLoRAWithSelector(nn.Module):
         prefix = 'backbone.'
         backbone_state_dict = {key[len(prefix):]: val for key, val in state_dict.items() if prefix in key}
         err_msg = self.backbone.load_state_dict(backbone_state_dict, strict=False)
-        assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+        assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key and 'adapter' not in key for key in err_msg.missing_keys)
 
         prefix = 'lora_exp_projector.'
         sel_state_dict = {key[len(prefix):]: val for key, val in state_dict.items() if prefix in key}
@@ -90,7 +90,7 @@ class CPMLoRAWithSelector(nn.Module):
         lora_state, linear_layer = self.split_to_lora_linear[split]
         if split != self.cur_loaded_split:
             err_msg = self.backbone.load_state_dict(lora_state, strict=False)
-            assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+            assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key and 'adapter' not in key for key in err_msg.missing_keys)
             self.cur_loaded_split = split
         return linear_layer
 

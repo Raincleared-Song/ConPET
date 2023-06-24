@@ -143,12 +143,12 @@ def main():
     parser.add_argument('--dataset_name', type=str, help='dataset name', default='',
                         choices=['fewnerd', 'ontonotes', 'bbn', 'fewrel', 'tacred', 'ace', 'chent'])
     parser.add_argument('--soft_prompt', type=int, help='soft prompt, -1 for auto', default=-1)
-    parser.add_argument('--prefix', '-p', type=str, help='prefix of the "checkpoints"', default='.')
+    parser.add_argument('--prefix', '-p', type=str, help='prefix of the "checkpoints"', default='../../scy_test')
     parser.add_argument('--metric', type=str, help='the metric to be checked', default='accuracy')
     parser.add_argument('--side_metrics', '-sms', type=str,
                         help='other metrics to be printed', default='accuracy_expert')
     parser.add_argument('--mode', '-m', choices=['valid', 'test'], type=str, default='valid')
-    parser.add_argument('--total_parts', '-tp', choices=['p5', 'p10', ''], type=str, default='')
+    parser.add_argument('--total_parts', '-tp', choices=['p5', 'p10', 'p8', ''], type=str, default='')
     parser.add_argument('--selector', '-sel', action='store_true')
     parser.add_argument('--split', '-s', help='check which part of categories', type=str, default='')
     parser.add_argument('--not_print_every', help='do not print all results', action='store_true')

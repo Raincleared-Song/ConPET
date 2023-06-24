@@ -209,7 +209,7 @@ class LossSimilarity:
                 split_model.resize_token_embeddings(model.config.vocab_size)
                 bert_state = {key: val for key, val in state.items() if key.startswith('bert')}
                 err_msg = split_model.bert_lora.load_state_dict(bert_state, strict=False)
-                assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+                assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key and 'adapter' not in key for key in err_msg.missing_keys)
                 if self.use_linear:
                     prefix = 'lora_linear_out.'
                     linear_state = {key[len(prefix):]: val for key, val in state.items() if key.startswith(prefix)}
@@ -345,7 +345,8 @@ class LossSimilarity:
         # forward by split
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
         assert self.model_name not in ['cpm', 'llama'] or not model.is_infer
-        logits, _ = self.forward_model_logits('', model.lora_exp_projector, batch, model, hidden_mask, is_selector=True)
+        exp_linear_out = model.lora_linear_selector if self.model_name not in ['cpm', 'llama'] else model.lora_exp_projector
+        logits, _ = self.forward_model_logits('', exp_linear_out, batch, model, hidden_mask, is_selector=True)
         logits = torch.log_softmax(logits, dim=1)
 
         if mode != 'train':
@@ -461,10 +462,11 @@ class LossSimilarity:
         current_tids = [token_to_tid[target] for target in current_targets]
         outputs = None
         assert self.model_name not in ['cpm', 'llama'] or not model.is_infer
+        model_linear_out = model.lora_linear_out if self.model_name not in ['cpm', 'llama'] else model.lora_projector
         if not self.continual_method.startswith('our'):
             assert not self.config['train']['use_expert_selector']
             outputs, representation = self.forward_model_logits(
-                '', model.lora_projector, batch, model, hidden_mask, is_selector=False)
+                '', model_linear_out, batch, model, hidden_mask, is_selector=False)
             if prototypes is None:
                 logits = outputs
             else:
@@ -481,7 +483,7 @@ class LossSimilarity:
                 loc_batch[key] = val
             loc_hidden_mask = hidden_mask[bids, :]
             outputs, _ = self.forward_model_logits(
-                '', model.lora_projector, loc_batch, model, loc_hidden_mask, is_selector=False)
+                '', model_linear_out, loc_batch, model, loc_hidden_mask, is_selector=False)
             temp_logits = logits[bids, :]
             temp_logits[:, current_tids] = outputs
             logits[bids, :] = temp_logits
@@ -555,8 +557,9 @@ class LossSimilarity:
     @torch.no_grad()
     def forward_select_continual_sample(self, model, tokenizer, batch, write_db=False):
         hidden_mask = self.get_hidden_mask(batch, tokenizer)
+        model_linear_out = model.lora_linear_out if self.model_name not in ['cpm', 'llama'] else model.lora_projector
         target_logits, _ = self.forward_model_logits(
-            '', model.lora_projector, batch, model, hidden_mask, is_selector=False)
+            '', model_linear_out, batch, model, hidden_mask, is_selector=False)
         target_logits = target_logits.cpu().numpy()
         batch_tags, sample_keys = batch['tags'].cpu().tolist(), batch['sample_keys']
         assert len(target_logits) == len(batch_tags) == len(sample_keys)

@@ -3,7 +3,8 @@ import torch
 from config import Param
 from methods.utils import setup_seed
 from methods.manager import Manager
-from global_var import get_epoch_map, get_batch_size_map, get_learning_rate
+from methods.manager_dynamic import ManagerDynamic
+from global_var import get_epoch_map, get_batch_size_map, get_learning_rate, get_batch_limit_map
 
 
 def run(args):
@@ -11,7 +12,8 @@ def run(args):
     print("hyper-parameter configurations:")
     print(str(args.__dict__))
 
-    manager = Manager(args)
+    manager_cls = ManagerDynamic if args.dynamic_sampling else Manager
+    manager = manager_cls(args)
     manager.train(args)
 
 
@@ -53,7 +55,9 @@ def main():
     if args.step2_epochs == -1:
         args.step2_epochs = num_epochs
     args.batch_size = get_batch_size_map(args.big_model)[args.dataset]
-    args.learning_rate = get_learning_rate(args.big_model, args.dataset)
+    args.learning_rate = get_learning_rate(args.big_model, args.dataset, 0)
+
+    args.batch_limit = get_batch_limit_map()[args.dataset]
 
     mkl.set_num_threads(args.num_threads)
     run(args)

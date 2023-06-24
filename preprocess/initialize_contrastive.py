@@ -326,15 +326,15 @@ def data_collate_fn(config, tokenizer):
                 extra_len, sent_limit = len(extra_ids), max_seq_len - 2 - len(extra_ids)
 
                 assert len(sent_ids) + len(extra_ids) + 2 > max_seq_len and len(input_id) == max_seq_len, text
-                head_pos = torch.nonzero(torch.eq(sent_ids, head_id), as_tuple=True)[0].item()
-                tail_pos = torch.nonzero(torch.eq(sent_ids, tail_id), as_tuple=True)[0].item()
+                head_pos = torch.nonzero(torch.eq(sent_ids, head_id), as_tuple=True)[0][0].item()
+                tail_pos = torch.nonzero(torch.eq(sent_ids, tail_id), as_tuple=True)[0][0].item()
                 assert 0 < tail_pos - head_pos, text
                 if tail_pos - head_pos >= sent_limit:
                     head_limit, tail_limit = sent_limit // 2, sent_limit - sent_limit // 2
                     head_aux_id = convert_token_to_id(head_end if head_before_tail else tail_end, tokenizer)
-                    head_aux_pos = torch.nonzero(torch.eq(sent_ids, head_aux_id), as_tuple=True)[0].item()
+                    head_aux_pos = torch.nonzero(torch.eq(sent_ids, head_aux_id), as_tuple=True)[0][0].item()
                     tail_aux_id = convert_token_to_id(tail_start if head_before_tail else head_start, tokenizer)
-                    tail_aux_pos = torch.nonzero(torch.eq(sent_ids, tail_aux_id), as_tuple=True)[0].item()
+                    tail_aux_pos = torch.nonzero(torch.eq(sent_ids, tail_aux_id), as_tuple=True)[0][0].item()
                     head_ids = truncate_sentence_with_entity(head_limit, head_pos, head_aux_pos, sent_ids)
                     tail_ids = truncate_sentence_with_entity(tail_limit, tail_aux_pos, tail_pos, sent_ids)
                     truncated_sent_ids = torch.cat((head_ids, tail_ids), dim=0)
@@ -416,8 +416,8 @@ def data_collate_fn(config, tokenizer):
                 extra_len, sent_limit = len(extra_ids), max_seq_len - 2 - len(extra_ids)
 
                 assert len(sent_ids) + len(extra_ids) + 2 > max_seq_len and len(input_id) == max_seq_len, text
-                head_pos = torch.nonzero(torch.eq(sent_ids, head_id), as_tuple=True)[0].item()
-                tail_pos = torch.nonzero(torch.eq(sent_ids, tail_id), as_tuple=True)[0].item()
+                head_pos = torch.nonzero(torch.eq(sent_ids, head_id), as_tuple=True)[0][0].item()
+                tail_pos = torch.nonzero(torch.eq(sent_ids, tail_id), as_tuple=True)[0][0].item()
                 assert 0 < tail_pos - head_pos < sent_limit, text
                 input_id[1:1 + sent_limit] = truncate_sentence_with_entity(sent_limit, head_pos, tail_pos, sent_ids)
                 input_id[-1 - extra_len:-1] = extra_ids
@@ -452,6 +452,8 @@ def get_contrastive_loader_by_dataset(config, part, dataset, tokenizer):
         mode = 'valid'
     cur_config = config[mode]
     if config['dataset']['batch_limit_policy'] > 0 and mode != 'test' and config['dataset']['special_part'] != 'p1':
+        use_cache = config['train']['continual_method'] == 'emr'
+        max_epoch_num = 1 if not use_cache else config['train']['num_epochs']
         loader = CustomLoader(
             config=config,
             mode=mode,
@@ -461,7 +463,11 @@ def get_contrastive_loader_by_dataset(config, part, dataset, tokenizer):
             num_workers=4,
             collate_fn=data_collate_fn(config, tokenizer),
             drop_last=False,
+            max_epoch_num=max_epoch_num,
+            use_cache=use_cache,
         )
+        if not use_cache:
+            assert loader.total_len == loader.overall_len
     else:
         loader = DataLoader(
             dataset=dataset,

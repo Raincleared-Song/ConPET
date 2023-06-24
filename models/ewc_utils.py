@@ -2,7 +2,7 @@ import torch
 from tqdm import tqdm
 import loralib as lora
 from preprocess import get_tag_set_by_dataset
-from .adapter import mark_only_adapter_as_trainable
+from .adapter import mark_only_adapter_lora_as_trainable
 
 
 def get_model_mean_fisher(config, train_loader, model, tokenizer, loss_sim,
@@ -19,7 +19,7 @@ def get_model_mean_fisher(config, train_loader, model, tokenizer, loss_sim,
     if config['plm']['apply_lora']:
         lora.mark_only_lora_as_trainable(model)
     elif config['plm']['apply_adapter']:
-        mark_only_adapter_as_trainable(model)
+        mark_only_adapter_lora_as_trainable(model)
 
     grad_mean, grad_fisher = {}, {}
     for n, p in model.named_parameters():

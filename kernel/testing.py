@@ -62,6 +62,8 @@ def test(config, data_loader, data_infer, model, tokenizer, loss_sim: LossSimila
     target_ones = torch.ones(label_num).to(type_embeds)
     tag_to_split, split_to_tags = GLOBAL['continual_tag_to_split'], GLOBAL['continual_split_to_tags']
 
+    init_db(os.path.join('databases', f"{config['dataset']['dataset_name']}_{config['logging']['cycle_suffix']}.db"))
+
     all_preds, all_tags = [], []
     correct_num, instance_num = 0, 0
     correct_num_exp, instance_num_exp = 0, 0

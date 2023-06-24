@@ -6,9 +6,14 @@ from preprocess import init_contrastive_dataloader
 
 
 @torch.no_grad()
-def get_embeddings(config, memorized_samples, model, tokenizer, loss_sim: LossSimilarity, before_reverse=False):
-    data_loader = init_contrastive_dataloader(config, {'train': [], 'test': memorized_samples}, tokenizer)[0]['test']
-    features = {}
+def get_embeddings(config, memorized_samples, model, tokenizer, loss_sim: LossSimilarity,
+                   before_reverse=False, return_tags=False):
+    if isinstance(memorized_samples, dict):
+        data_loader = memorized_samples['train_infer']
+    else:
+        data_loader = init_contrastive_dataloader(
+            config, {'train': [], 'test': memorized_samples}, tokenizer)[0]['test']
+    features, key2tags = {}, {}
     backup_alignment = model.lora_alignment
     if before_reverse:
         model.lora_alignment = None
@@ -17,15 +22,18 @@ def get_embeddings(config, memorized_samples, model, tokenizer, loss_sim: LossSi
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(config['device'], non_blocking=True)
         hidden_mask = batch['input_ids'] == tokenizer.mask_token_id
+        model_name = config['plm']['model_name']
+        model_linear_out = model.lora_linear_out if model_name not in ['cpm', 'llama'] else model.lora_projector
         feature = loss_sim.forward_model_logits(
-            '', model.lora_projector, batch, model, hidden_mask, is_selector=False)[1]
+            '', model_linear_out, batch, model, hidden_mask, is_selector=False)[1]
         feature = feature.detach().cpu()
-        assert len(feature) == len(batch['sample_keys'])
-        for fea, sample_key in zip(feature, batch['sample_keys']):
+        assert len(feature) == len(batch['sample_keys']) == len(batch['tags'])
+        for fea, sample_key, tag in zip(feature, batch['sample_keys'], batch['tags']):
             features[sample_key] = fea
+            key2tags[sample_key] = int(tag)
     if before_reverse:
         model.lora_alignment = backup_alignment
-    return features
+    return (features, key2tags) if return_tags else features
 
 
 def update_alignment_model(config, cur_embeddings: dict, mem_embeddings: dict, lora_alignment):

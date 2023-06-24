@@ -51,13 +51,16 @@ def get_batch_size_map(big_model: bool):
         }
 
 
-def get_learning_rate(big_model: bool, dataset_name: str, split_id: int, method: str):
+def get_learning_rate(big_model: bool, dataset_name: str, split_id: int, method: str, is_adapter=False):
     if big_model:
         if dataset_name == 'fewnerd':
             if method not in ['emr', 'emar', 'eaemr', 'our_abl', 'emr_abl']:
-                return 0.0005 if split_id <= 2 else 0.0001
+                if is_adapter:
+                    return 0.0001
+                else:
+                    return 0.0005 if split_id <= 2 else 0.0001
             else:
-                return 2.0e-5
+                return 1.0e-5 if is_adapter else 2.0e-5
         elif dataset_name == 'ontonotes':
             return 0.0005 if split_id <= 3 else 0.0001
         elif dataset_name == 'bbn':

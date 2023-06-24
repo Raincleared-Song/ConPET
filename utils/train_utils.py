@@ -28,7 +28,7 @@ def save_model(path: str, model, optimizer_name, optimizer, scheduler,
             model_state_dict = lora.lora_state_dict(model)
         elif any('adapter' in key for key in model_state_dict.keys()):
             model_state_dict = model.state_dict()
-            model_state_dict = {k: model_state_dict[k] for k in model_state_dict if 'adapter' in k}
+            model_state_dict = {k: model_state_dict[k] for k in model_state_dict if 'adapter' in k or 'lora' in k}
         ret['model'] = model_state_dict
     if scheduler is not None:
         ret['scheduler'] = scheduler.state_dict()

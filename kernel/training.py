@@ -7,7 +7,7 @@ from tqdm import tqdm
 import loralib as lora
 from global_var import GLOBAL
 from loss_similarity import LossSimilarity
-from models import mark_only_adapter_as_trainable, get_model_mean_fisher, BertLoRAWithSelector
+from models import mark_only_adapter_lora_as_trainable, get_model_mean_fisher, BertLoRAWithSelector, adapter_lora_state_dict
 from .training_selector import train_selector
 from .testing import valid_save, test_by_best, test
 from utils import load_json, save_json, load_partial_checkpoint, update_tag_loss_count, init_db, clear_write_thread
@@ -80,7 +80,12 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
         cpu_linear_selector.zero_grad()
         cpu_linear_selector.eval()
         cpu_linear_selector = cpu_linear_selector.to(config['infer_device'])
-        lora_state = {key: val.cpu() for key, val in lora.lora_state_dict(model.backbone).items()}
+        assert config['plm']['apply_lora'] or config['plm']['apply_adapter']
+        if config['plm']['apply_lora']:
+            infer_dict = lora.lora_state_dict(model.backbone)
+        else:
+            infer_dict = adapter_lora_state_dict(model.backbone)
+        lora_state = {key: val.cpu() for key, val in infer_dict.items()}
         GLOBAL['infer_model'].add_delta('selector', lora_state, cpu_linear_selector)
 
     # initialize logit cache
@@ -164,7 +169,7 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
             if config['plm']['apply_lora']:
                 lora.mark_only_lora_as_trainable(model)
             elif config['plm']['apply_adapter']:
-                mark_only_adapter_as_trainable(model)
+                mark_only_adapter_lora_as_trainable(model)
 
             try:
                 loss, loss_vec = loss_sim.forward_similarity_train(model, tokenizer, batch,
@@ -238,15 +243,15 @@ def train(config, data_loaders, model, tokenizer, loss_sim: LossSimilarity,
     if config['train']['continual_method'] == 'ewc':
         generate_grad(config, train_loader, model, tokenizer, loss_sim, tag_to_loss_weight)
     # write logit to cache
-    if config['train']['continual_method'].startswith('our'):
-        for loader in [train_loader, valid_groups, test_groups]:
-            epoch_iterator = tqdm(loader, desc="logit generation") if len(train_loader) > 20 else train_loader
-            for step, batch in enumerate(epoch_iterator):
-                for key, value in batch.items():
-                    if isinstance(value, torch.Tensor):
-                        batch[key] = value.to(config['device'], non_blocking=True)
-                loss_sim.forward_select_continual_sample(model, tokenizer, batch, write_db=True)
-        clear_write_thread()
+    # if config['train']['continual_method'].startswith('our'):
+    #     for loader in [train_loader, valid_groups, test_groups]:
+    #         epoch_iterator = tqdm(loader, desc="logit generation") if len(train_loader) > 20 else train_loader
+    #         for step, batch in enumerate(epoch_iterator):
+    #             for key, value in batch.items():
+    #                 if isinstance(value, torch.Tensor):
+    #                     batch[key] = value.to(config['device'], non_blocking=True)
+    #             loss_sim.forward_select_continual_sample(model, tokenizer, batch, write_db=True)
+    #     clear_write_thread()
 
     with open(os.path.join(exp_path, 'flag'), 'w') as fout:
         fout.write('complete\n')

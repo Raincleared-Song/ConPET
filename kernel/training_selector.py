@@ -5,7 +5,7 @@ import shutil
 from tqdm import tqdm
 import loralib as lora
 from loss_similarity import LossSimilarity
-from models import mark_only_adapter_as_trainable, BertLoRAWithSelector
+from models import mark_only_adapter_lora_as_trainable, BertLoRAWithSelector
 from .testing import valid_save, test_by_best
 from preprocess import get_tag_set_by_dataset
 from utils import update_tag_loss_count
@@ -85,7 +85,7 @@ def train_selector(config, data_loaders, model, tokenizer, loss_sim: LossSimilar
             if config['plm']['apply_lora']:
                 lora.mark_only_lora_as_trainable(model)
             elif config['plm']['apply_adapter']:
-                mark_only_adapter_as_trainable(model)
+                mark_only_adapter_lora_as_trainable(model)
 
             try:
                 _, loss, loss_vec = loss_sim.generate_expert_selector_logits('train', model, tokenizer, batch,

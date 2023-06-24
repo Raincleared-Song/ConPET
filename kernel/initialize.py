@@ -2,10 +2,12 @@ import os
 import torch
 import loralib as lora
 from utils import load_json
-from torch.optim import AdamW
+# from torch.optim import AdamW
+from bmt_models.adamw import AdamW
 from loss_similarity import LossSimilarity
 from bmt_models import CPMBeeTokenizer
 from global_var import GLOBAL
+from models import mark_only_adapter_lora_as_trainable
 from models import BertForMaskedLMLoRA, BertLoRAWithSelector, CPMLoRAWithSelector, LlamaLoRAWithSelector
 from transformers.optimization import get_linear_schedule_with_warmup
 from transformers import T5Tokenizer, T5ForConditionalGeneration, AutoTokenizer, AutoModelForMaskedLM, LlamaForCausalLM
@@ -55,11 +57,11 @@ def init_tokenizer_model(config):
             model_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
             err_msg = model.load_selector_state_dict(model_state, strict=False)
             assert len(err_msg.unexpected_keys) == 0 and \
-                   all('lora' not in key for key in err_msg.missing_keys)
+                   all('lora' not in key and 'adapter' not in key for key in err_msg.missing_keys)
     elif model_name == 'cpm':
         tokenizer = CPMBeeTokenizer()
         assert all(len(tokenizer.tokenize(f"<unused{idx}>")) == 1 for idx in range(5))
-        assert config['plm']['apply_lora']
+        assert config['plm']['apply_lora'] or config['plm']['apply_adapter']
         model_state = torch.load(config['plm']['model_path'], map_location='cpu')
         model = CPMLoRAWithSelector(config, is_infer=False, with_selector=use_expert_selector, linear_dim=linear_dim,
                                     linear_dim_exp=linear_dim_exp, model_state=model_state).to(config['device'])
@@ -68,7 +70,10 @@ def init_tokenizer_model(config):
             print('loading expert selector from:', config['select_checkpoint'])
             sel_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
             model.load_selector_state_dict(sel_state)
-        lora.mark_only_lora_as_trainable(model)
+        if config['plm']['apply_lora']:
+            lora.mark_only_lora_as_trainable(model)
+        elif config['plm']['apply_adapter']:
+            mark_only_adapter_lora_as_trainable(model)
         if config['train']['continual_method'].startswith('our'):
             infer_model = CPMLoRAWithSelector(
                 config, is_infer=True, with_selector=use_expert_selector, linear_dim=-1,
@@ -85,7 +90,7 @@ def init_tokenizer_model(config):
         tokenizer.add_special_tokens({"additional_special_tokens": [
             '<s>', '</s>', '<unk>'] + [f'<0x{idx:02}>' for idx in range(6)]})
         assert all(len(tokenizer.tokenize(f"<0x{idx:02}>")) == 1 for idx in range(6))
-        assert config['plm']['apply_lora']
+        assert config['plm']['apply_lora'] or config['plm']['apply_adapter']
         model = LlamaForCausalLM.from_pretrained(model_path)
         model_state = model.state_dict()
         del model
@@ -96,7 +101,10 @@ def init_tokenizer_model(config):
             print('loading expert selector from:', config['select_checkpoint'])
             sel_state = torch.load(config['select_checkpoint'], map_location='cpu')['model']
             model.load_selector_state_dict(sel_state)
-        lora.mark_only_lora_as_trainable(model)
+        if config['plm']['apply_lora']:
+            lora.mark_only_lora_as_trainable(model)
+        elif config['plm']['apply_adapter']:
+            mark_only_adapter_lora_as_trainable(model)
         if config['train']['continual_method'].startswith('our'):
             infer_model = LlamaLoRAWithSelector(
                 config, is_infer=True, with_selector=use_expert_selector, linear_dim=-1,

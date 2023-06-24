@@ -5,26 +5,7 @@ import torch
 import pickle
 import random
 from tqdm import trange
-from transformers import BertTokenizer, AutoTokenizer
-
-
-def get_tokenizer(args):
-    if 'bert' in args.bert_path:
-        tokenizer = BertTokenizer.from_pretrained(args.bert_path, model_max_length=args.max_length)
-        tokenizer.add_special_tokens({"additional_special_tokens": [f"[unused{idx}]" for idx in range(5)]})
-        assert all(len(tokenizer.tokenize(f"[unused{idx}]")) == 1 for idx in range(5))
-    elif 'llama' in args.bert_path:
-        tokenizer = AutoTokenizer.from_pretrained(args.bert_path)
-        tokenizer.unk_token, tokenizer.unk_token_id = '<unk>', 0
-        tokenizer.pad_token, tokenizer.pad_token_id = '<unk>', 0
-        tokenizer.bos_token, tokenizer.eos_token, tokenizer.mask_token = '<s>', '</s>', '<0x05>'
-        tokenizer.padding_side = 'right'
-        tokenizer.add_special_tokens({
-            "additional_special_tokens": ['<s>', '</s>', '<unk>'] + [f'<0x{idx:02}>' for idx in range(6)]})
-        assert all(len(tokenizer.tokenize(f"<0x{idx:02}>")) == 1 for idx in range(6))
-    else:
-        raise NotImplementedError(f'invalid bert_path: {args.bert_path}')
-    return tokenizer
+from .data_utils import get_tokenizer
 
 
 class DataSampler:
@@ -33,6 +14,10 @@ class DataSampler:
         self.set_path(args)
         self.args = args
         temp_name = [args.dataset, args.seed]
+        if 'bert' in args.bert_path:
+            temp_name.append('bert')
+        # if args.dynamic_sampling:
+        #     temp_name.append('dynamic')
         file_name = "{}.pkl".format(
             "-".join([str(x) for x in temp_name])
         )
@@ -64,7 +49,6 @@ class DataSampler:
         with open(args.split_file, encoding='utf-8') as fin:
             self.class_split = json.load(fin)
         self.relation_num = len(self.id2rel)
-        self.total_split = 10 if args.dataset != 'ace' else 5
         self.rel2split = [-1 for _ in range(self.relation_num)]
         for split, tags in self.class_split.items():
             if split[0] != 'p':

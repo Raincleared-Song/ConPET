@@ -1,3 +1,15 @@
+def get_batch_limit_map():
+    return {
+        'fewnerd': 2500,
+        'ontonotes': 1250,
+        'bbn': 500,
+        'fewrel': 400,
+        'tacred': 100,
+        'ace': 100,
+        'chent': 1250,
+    }
+
+
 def get_epoch_map(big_model: bool):
     if big_model:
         return {
@@ -44,14 +56,14 @@ def get_batch_size_map(big_model: bool):
         }
 
 
-def get_learning_rate(big_model: bool, dataset_name: str):
+def get_learning_rate(big_model: bool, dataset_name: str, step: int):
     if big_model:
         if dataset_name == 'fewnerd':
             return 0.0001
         elif dataset_name == 'ontonotes':
-            return 0.0001
+            return 0.0005 if step < 3 else 0.0002
         elif dataset_name == 'bbn':
-            return 0.0002
+            return 0.0002 if step < 3 else 0.0001
         elif dataset_name == 'fewrel':
             return 0.0002
         elif dataset_name == 'tacred':

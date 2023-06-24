@@ -15,7 +15,7 @@ class Moment:
         self.labels = None
         self.mem_labels = None
         self.memlen = 0
-        self.sample_k = 500
+        self.sample_k = args.sample_k
         self.temperature = args.temp
         self.device = args.device
         self.torch_dtype = torch.half if 'llama' in args.bert_path else torch.float
@@ -48,12 +48,18 @@ class Moment:
             self.hidden_features[ind] = hidden
 
     @torch.no_grad()
-    def init_moment(self, args, encoder, datasets, is_memory=False):
+    def init_moment(self, args, encoder, datasets=None, data_loader=None, is_memory=False):
         encoder.eval()
-        data_len = len(datasets)
+        if data_loader is not None:
+            assert datasets is None
+            data_len = data_loader.data_len
+        else:
+            assert datasets is not None
+            data_loader = get_data_loader(args, datasets)
+            data_len = len(datasets)
+
         if not is_memory:
             self.features = torch.zeros(data_len, args.feat_dim, dtype=self.torch_dtype)
-            data_loader = get_data_loader(args, datasets)
             td = tqdm(data_loader, desc='init_mom')
             lbs = []
             for step, batch_data in enumerate(td):
@@ -76,8 +82,7 @@ class Moment:
             self.mem_features = torch.zeros(data_len, args.feat_dim, dtype=self.torch_dtype)
             self.hidden_features = torch.zeros(data_len, args.encoder_output_size, dtype=self.torch_dtype)
             lbs = []
-            data_loader = get_data_loader(args, datasets)
-            td = tqdm(data_loader)
+            td = tqdm(data_loader, desc='init_mom_mem')
             for step, batch_data in enumerate(td):
                 labels, tokens, attention_mask, mask_ids, ind = batch_data
                 tokens = tokens.to(args.device)
@@ -86,33 +91,37 @@ class Moment:
                 hidden, reps = encoder.bert_forward(tokens, attention_mask, mask_ids)
                 self.update_mem(ind, reps.detach().cpu(), hidden.detach().cpu())
                 lbs.append(labels)
-            self.mem_labels = torch.cat(lbs).cpu()
-
-    def loss(self, x, labels, is_mem=False):
-
-        if is_mem:
-            ct_x = self.mem_features
-            ct_y = self.mem_labels
-        else:
-            if self.sample_k is not None:
-                # sample some instances to calculate the contrastive loss
-                idx = list(range(len(self.features)))
-                passed, ct_x, ct_y = False, None, None
-                while not passed:
-                    if len(idx) > self.sample_k:
-                        sample_id = random.sample(idx, self.sample_k)
-                    else:
-                        sample_id = idx
-                    ct_x = self.features[sample_id]
-                    ct_y = self.labels[sample_id]
-                    passed = True
-                    for lab in labels:
-                        if torch.sum(torch.eq(ct_y, lab.item())) == 0:
-                            passed = False
-                            break
+            if hasattr(data_loader, 'raw_labels'):
+                self.mem_labels = data_loader.raw_labels
             else:
-                ct_x = self.features
-                ct_y = self.labels
+                self.mem_labels = torch.cat(lbs).cpu()
+
+    def loss(self, x, labels, is_mem=False, force_all=False):
+        if is_mem:
+            all_features, all_labels = self.mem_features, self.mem_labels
+        else:
+            all_features, all_labels = self.features, self.labels
+
+        if self.sample_k is not None and not (is_mem and force_all):
+            # sample some instances to calculate the contrastive loss
+            idx = list(range(len(all_features)))
+            passed, ct_x, ct_y = False, None, None
+            while not passed:
+                if len(idx) > self.sample_k:
+                    sample_id = random.sample(idx, self.sample_k)
+                else:
+                    sample_id = idx
+                ct_x = all_features[sample_id]
+                ct_y = all_labels[sample_id]
+                passed = True
+                for lab in labels:
+                    if torch.sum(torch.eq(ct_y, lab.item())) == 0:
+                        passed = False
+                        break
+        else:
+            ct_x = all_features
+            ct_y = all_labels
+
         ct_x, ct_y = ct_x.to(self.device), ct_y.to(self.device)
 
         dot_product_tempered = torch.mm(x, ct_x.T) / self.temperature  # n * m
@@ -124,7 +133,12 @@ class Moment:
         mask_combined = torch.eq(labels.unsqueeze(1).repeat(1, ct_y.shape[0]), ct_y).to(self.device)  # n*m
         cardinality_per_samples = torch.sum(mask_combined, dim=1)
 
-        log_prob = -torch.log(exp_dot_tempered / (torch.sum(exp_dot_tempered, dim=1, keepdim=True)))
+        # if is_mem:
+        #     log_prob = -torch.log(exp_dot_tempered / torch.mean(exp_dot_tempered, dim=1, keepdim=True))
+        #     supervised_contrastive_loss_per_sample = \
+        #         torch.mean(log_prob * mask_combined, dim=1) * (log_prob.shape[1] / cardinality_per_samples)
+        # else:
+        log_prob = -torch.log(exp_dot_tempered / torch.sum(exp_dot_tempered, dim=1, keepdim=True))
         supervised_contrastive_loss_per_sample = torch.sum(log_prob * mask_combined, dim=1) / cardinality_per_samples
         supervised_contrastive_loss = torch.mean(supervised_contrastive_loss_per_sample)
 

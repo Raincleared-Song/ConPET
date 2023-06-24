@@ -18,6 +18,8 @@ class LlamaLoRAWithSelector(nn.Module):
         model_config.max_length = max_seq_len
         config_dict = model_config.to_dict()
         config_dict['apply_lora'], config_dict['lora_r'] = config['plm']['apply_lora'], config['plm']['lora_r']
+        config_dict['apply_adapter'], config_dict['adapter_type'], config_dict['adapter_size'] = \
+            config['plm']['apply_adapter'], config['plm']['adapter_type'], config['plm']['adapter_size']
         self.config = LlamaConfigLoRA.from_dict(config_dict)
 
         # set alignment and the linear dim
@@ -32,7 +34,7 @@ class LlamaLoRAWithSelector(nn.Module):
             model_state = model.state_dict()
             del model
         err_msg = self.backbone.load_state_dict(model_state, strict=False)
-        assert len(err_msg.unexpected_keys) == 0 and all('lora' in key for key in err_msg.missing_keys)
+        assert len(err_msg.unexpected_keys) == 0 and all('lora' in key or 'adapter' in key for key in err_msg.missing_keys)
 
         if self.linear_dim > 0:
             self.lora_projector = nn.Linear(self.config.hidden_size, self.linear_dim, dtype=torch.half)
@@ -53,7 +55,7 @@ class LlamaLoRAWithSelector(nn.Module):
         prefix = 'backbone.'
         backbone_state_dict = {key[len(prefix):]: val for key, val in state_dict.items() if prefix in key}
         err_msg = self.backbone.load_state_dict(backbone_state_dict, strict=False)
-        assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+        assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key and 'adapter' not in key for key in err_msg.missing_keys)
 
         prefix = 'lora_exp_projector.'
         sel_state_dict = {key[len(prefix):]: val for key, val in state_dict.items() if prefix in key}
@@ -77,7 +79,7 @@ class LlamaLoRAWithSelector(nn.Module):
         lora_state, linear_layer = self.split_to_lora_linear[split]
         if split != self.cur_loaded_split:
             err_msg = self.backbone.load_state_dict(lora_state, strict=False)
-            assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key for key in err_msg.missing_keys)
+            assert len(err_msg.unexpected_keys) == 0 and all('lora' not in key and 'adapter' not in key for key in err_msg.missing_keys)
             self.cur_loaded_split = split
         return linear_layer
 

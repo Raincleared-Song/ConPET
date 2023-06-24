@@ -15,7 +15,7 @@ class BertEncoder(nn.Module):
         model.config.max_length = max_seq_len
         state_dict, config_dict = model.state_dict(), model.config.to_dict()
         del model
-        config_dict['apply_lora'], config_dict['lora_r'] = True, 4
+        config_dict['apply_lora'], config_dict['lora_r'] = not args.not_apply_lora, 4
         config_dict['apply_adapter'], config_dict['adapter_type'], config_dict['adapter_size'] = False, 'houlsby', 64
         self.bert_config = BertLoRAConfig.from_dict(config_dict)
 
@@ -51,7 +51,7 @@ class LlamaEncoder(nn.Module):
         model_config = LlamaConfig.from_pretrained(model_path)
         model_config.max_length = max_seq_len
         config_dict = model_config.to_dict()
-        config_dict['apply_lora'], config_dict['lora_r'] = True, 4
+        config_dict['apply_lora'], config_dict['lora_r'] = not args.not_apply_lora, 4
         self.config = LlamaConfigLoRA.from_dict(config_dict)
 
         self.encoder = LlamaForCausalLMLoRA(self.config)

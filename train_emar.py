@@ -9,7 +9,7 @@ import argparse
 from global_var import GLOBAL
 from loss_similarity import LossSimilarity
 from utils import init_seed, load_json, save_json
-from preprocess import init_type_descriptions, init_contrastive_dataloader
+from preprocess import init_type_descriptions, init_contrastive_dataloader, init_contrastive_dataset
 from kernel import init_tokenizer_model, init_optimizer, train_emar, train, select_continual_samples
 from global_var import get_epoch_map, get_learning_rate, get_batch_size_map
 
@@ -75,6 +75,8 @@ def main():
     parser.add_argument('--start', type=int, help='start split', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--method_type', type=str, choices=['prompt', 'linear', 'marker'], default='linear')
+    parser.add_argument('--batch_limit_policy', type=int, help='batch limit policy', default=0)
+    parser.add_argument('--batch_limit', type=int, help='batch sample limit', default=1000)
     parser.add_argument('--global_cp_path', type=str, default='')
     parser.add_argument('--seed', type=int, help='the random seed', default=100)
     parser.add_argument('--clear', action='store_true', help='clear the history cache_flag and samples')
@@ -100,6 +102,7 @@ def main():
     emar_epoch_num_map = get_epoch_map(big_model)
 
     # set the config entries
+    use_selected = args.batch_limit_policy == 0
     config['type_checkpoint'] = config['grad_checkpoint'] = \
         config['select_checkpoint'] = config['checkpoint'] = ''
     config['is_test'] = config['generate_grad'] = \
@@ -112,13 +115,16 @@ def main():
     config['train']['use_expert_selector'] = False
     config['train']['num_epochs'] = emar_epoch_num_map[args.dataset_name]
     config['train']['save_step'] = -1
-    config['dataset']['batch_limit_policy'] = 0
+    config['dataset']['batch_limit_policy'] = args.batch_limit_policy
+    config['dataset']['batch_limit'] = args.batch_limit
     config['dataset']['seed'] = config['reproduce']['seed'] = args.seed
-    config['dataset']['use_selected'] = True
+    config['dataset']['use_selected'] = use_selected
     config['sample_num'] = sample_num_map[args.dataset_name]
     config['device'] = args.device
 
-    if args.clear:
+    if not use_selected:
+        raise NotImplementedError('Custom loader not implemented!')
+    if use_selected and args.clear:
         for idx in range(args.start, total_bound + 1):
             exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                        f'lora4_mk00_p{idx}{cycle_suffix}'
@@ -176,14 +182,15 @@ def main():
             metrics_file_ls.sort(key=lambda x: os.path.getmtime(os.path.join(exp_path, 'test', x)), reverse=True)
             sequence_results.append(load_json(os.path.join(exp_path, 'test', metrics_file_ls[0])))
 
-        wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
-                    f'_p{idx}{cycle_suffix}.json'
-        selected_samples = load_json(wait_file)
-        # selected_samples = select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
-        mem_train_data += selected_samples['train_infer']
-        mem_valid_data += selected_samples['valid_groups']
-        for key, tag, text in selected_samples['train_infer'] + selected_samples['valid_groups']:
-            proto_memory[tag].append((key, tag, text))
+        if use_selected:
+            wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                        f'_p{idx}{cycle_suffix}.json'
+            selected_samples = load_json(wait_file)
+            # selected_samples = select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
+            mem_train_data += selected_samples['train_infer']
+            mem_valid_data += selected_samples['valid_groups']
+            for key, tag, text in selected_samples['train_infer'] + selected_samples['valid_groups']:
+                proto_memory[tag].append((key, tag, text))
         accu_test_data += ori_dataset['test'][idx - 1]
 
         model_path = os.path.join(exp_path, 'models', 'tot-best.pkl')
@@ -246,32 +253,33 @@ def main():
         print('fine-tuning test results:', test_results)
 
         # II. sample selection
-        wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
-                    f'_p{idx}{cycle_suffix}.json'
-        cache_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
-        if big_model and not os.path.exists(wait_file):
-            # for big models, compute logits locally
-            select_dataset = {'train_infer': cur_train_data}
-            select_loader, _ = init_contrastive_dataloader(config, select_dataset, tokenizer)
-            select_continual_samples(config, select_loader, model, tokenizer, loss_sim)
-            with open(cache_flag_path, 'w') as fout:
-                fout.write('cache complete\n')
+        if use_selected:
+            wait_file = f'cache/{args.dataset_name}_continual_{total_parts}_selected_{exp_prefix}' \
+                        f'_p{idx}{cycle_suffix}.json'
+            cache_flag_path = os.path.join(global_cp_path, exp_path, 'cache_flag')
+            if big_model and not os.path.exists(wait_file):
+                # for big models, compute logits locally
+                select_dataset = {'train_infer': cur_train_data}
+                select_loader, _ = init_contrastive_dataloader(config, select_dataset, tokenizer)
+                select_continual_samples(config, select_loader, model, tokenizer, loss_sim)
+                with open(cache_flag_path, 'w') as fout:
+                    fout.write('cache complete\n')
 
-        print('waiting for ', wait_file, '.' * 30)
-        while True:
-            if os.path.exists(wait_file):
-                print()
-                break
-            time.sleep(60)
-        print('=' * 30)
+            print('waiting for ', wait_file, '.' * 30)
+            while True:
+                if os.path.exists(wait_file):
+                    print()
+                    break
+                time.sleep(60)
+            print('=' * 30)
 
-        selected_samples = load_json(wait_file)
-        # selected_samples = select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
-        mem_train_data += selected_samples['train_infer']
-        mem_valid_data += selected_samples['valid_groups']
-        loss_sim.continual_logit_cache.clear()
-        for key, tag, text in selected_samples['train_infer'] + selected_samples['valid_groups']:
-            proto_memory[tag].append((key, tag, text))
+            selected_samples = load_json(wait_file)
+            # selected_samples = select_continual_samples(config, data_loaders, model, tokenizer, loss_sim)
+            mem_train_data += selected_samples['train_infer']
+            mem_valid_data += selected_samples['valid_groups']
+            loss_sim.continual_logit_cache.clear()
+            for key, tag, text in selected_samples['train_infer'] + selected_samples['valid_groups']:
+                proto_memory[tag].append((key, tag, text))
 
         # EMAR train_function
         replay_frequency = get_emr_replay_frequency(args.dataset_name, idx, len(mem_train_data) * 2, big_model)

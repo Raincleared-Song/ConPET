@@ -16,12 +16,12 @@ class Adapter(nn.Module):
         return result + residual
 
 
-def mark_only_adapter_as_trainable(model):
+def mark_only_adapter_lora_as_trainable(model):
     for n, p in model.named_parameters():
-        if 'adapter' not in n:
+        if 'adapter' not in n and 'lora' not in n:
             p.requires_grad = False
 
 
-def adapter_state_dict(model):
+def adapter_lora_state_dict(model):
     my_state_dict = model.state_dict()
-    return {k: my_state_dict[k] for k in my_state_dict if 'adapter' in k}
+    return {k: my_state_dict[k] for k in my_state_dict if 'adapter' in k or 'lora' in k}

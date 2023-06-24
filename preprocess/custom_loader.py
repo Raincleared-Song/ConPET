@@ -4,7 +4,8 @@ from utils import complex_sample
 
 
 class CustomLoader:
-    def __init__(self, config, mode, dataset, batch_size, shuffle, num_workers, collate_fn, drop_last):
+    def __init__(self, config, mode, dataset, batch_size, shuffle, num_workers, collate_fn, drop_last,
+                 max_epoch_num=1, use_cache=False):
         assert mode != 'test'
         self.config = config
         self.mode = mode
@@ -37,6 +38,10 @@ class CustomLoader:
             self.total_len = self.batch_limit
         factor = 0.8 if self.mode == 'train' else 0.2
         self.total_len = int(self.total_len * factor)
+        self.overall_len = self.total_len * max_epoch_num
+        self.just_stop = True
+        self.cached_batches = []
+        self.use_cache = use_cache
         self.iter_pointer = 0
 
     def init_dataset_split(self, dataset):
@@ -59,24 +64,32 @@ class CustomLoader:
             else:
                 new_dataset.append((sample_key, tag, text))
         print(f'old dataset pool: {len(old_dataset)}; new dataset pool: {len(new_dataset)}')
+        assert len(old_dataset) > 0 and len(new_dataset) > 0
         return old_dataset, new_dataset
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        if self.iter_pointer == self.total_len:
-            self.iter_pointer = 0
+        if not self.just_stop and self.iter_pointer % self.total_len == 0:
+            if self.iter_pointer >= self.overall_len:
+                self.iter_pointer = 0
+            self.just_stop = True
             raise StopIteration()
-        cur_batch = []
-        for sample_id in range(self.old_sample_num):
-            cur_split_id = complex_sample(self.old_split_ids, 1, replace=False)[0]
-            cur_batch.append(complex_sample(self.old_dataset[cur_split_id], 1, replace=False)[0])
-        cur_batch += complex_sample(self.new_dataset, self.new_sample_num, replace=False)
-        if self.shuffle:
-            random.shuffle(cur_batch)
+        if self.use_cache and len(self.cached_batches) == self.overall_len:
+            cur_batch = self.cached_batches[self.iter_pointer]
+        else:
+            cur_batch = []
+            for sample_id in range(self.old_sample_num):
+                cur_split_id = complex_sample(self.old_split_ids, 1, replace=False)[0]
+                cur_batch.append(complex_sample(self.old_dataset[cur_split_id], 1, replace=False)[0])
+            cur_batch += complex_sample(self.new_dataset, self.new_sample_num, replace=False)
+            if self.shuffle:
+                random.shuffle(cur_batch)
+            self.cached_batches.append(cur_batch)
         ret = self.collate_fn(cur_batch)
         self.iter_pointer += 1
+        self.just_stop = False
         return ret
 
     def __len__(self):

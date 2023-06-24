@@ -51,6 +51,12 @@ class Param:
         # Temperature parameter in CL and CR
         parser.add_argument("--temp", default=0.1, type=float)
 
+        # the sample_k used in utils.py
+        parser.add_argument("--sample_k", default=1000, type=int)
+
+        # the minimum number of samples for each tag in CustomLoader
+        parser.add_argument("--min_sample_num", default=10, type=int)
+
         # The projection head outputs dimensions
         parser.add_argument("--feat_dim", default=64, type=int)
 
@@ -66,7 +72,9 @@ class Param:
 
         parser.add_argument("--seed", default=100, type=int)
 
-        parser.add_argument("--max_grad_norm", default=10, type=float) 
+        parser.add_argument("--max_grad_norm", default=10, type=float)
+
+        parser.add_argument("--not_apply_lora", action="store_true")
 
         # Memory size
         # parser.add_argument("--num_protos", default=20, type=int)
@@ -82,5 +90,7 @@ class Param:
         parser.add_argument("--replay", action="store_true")
 
         parser.add_argument("--num_threads", default=8, type=int)
+
+        parser.add_argument("--dynamic_sampling", action="store_true")
 
         return parser
