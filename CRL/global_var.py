@@ -17,19 +17,19 @@ def get_epoch_map(big_model: bool):
             'ontonotes': 10,
             'bbn': 10,
             'fewrel': 10,
-            'tacred': 10,
-            'ace': 10,
+            'tacred': 20,
+            'ace': 20,
             'chent': 10,
         }
     else:
         return {
             'fewnerd': 10,
-            'ontonotes': 10,
-            'bbn': 10,
+            'ontonotes': 20,
+            'bbn': 20,
             'fewrel': 10,
-            'tacred': 10,
-            'ace': 10,
-            'chent': 10,
+            'tacred': 20,
+            'ace': 20,
+            'chent': 20,
         }
 
 

@@ -8,7 +8,7 @@ import argparse
 import subprocess
 from utils import load_json, reset_database
 from matplotlib import pyplot as plt
-from global_var import get_epoch_map, get_learning_rate, get_batch_size_map
+from global_var import get_epoch_map, get_learning_rate, get_batch_size_map, get_batch_limit
 
 
 global_cp_path = '../../scy_test/checkpoints'
@@ -226,7 +226,8 @@ def main():
             config_base['train']['use_expert_selector'] = True if idx >= 2 else False
         config_base['train']['teacher_forcing'] = args.teacher_forcing
         config_base['dataset']['batch_limit_policy'] = args.batch_limit_policy
-        config_base['dataset']['batch_limit'] = args.batch_limit
+        # config_base['dataset']['batch_limit'] = args.batch_limit
+        config_base['dataset']['batch_limit'] = get_batch_limit(args.dataset_name)
         config_base['dataset']['batch_new_old_ratio'] = args.batch_new_old_ratio
         config_base['dataset']['seed'] = config_base['reproduce']['seed'] = args.seed
         config_base['dataset']['use_selected'] = use_selected

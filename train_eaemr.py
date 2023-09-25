@@ -12,7 +12,7 @@ from utils import init_seed, load_json, save_json
 from preprocess import init_type_descriptions, init_contrastive_dataloader, init_contrastive_dataset
 from kernel import init_tokenizer_model, init_optimizer, train, get_embeddings, update_alignment_model, \
     test, select_continual_samples
-from global_var import get_epoch_map, get_learning_rate, get_batch_size_map
+from global_var import get_epoch_map, get_learning_rate, get_batch_size_map, get_batch_limit
 
 
 global_cp_path = '../../scy_test/checkpoints'
@@ -121,7 +121,8 @@ def main():
     config['train']['num_epochs'] = emar_epoch_num_map[args.dataset_name]
     config['train']['save_step'] = -1
     config['dataset']['batch_limit_policy'] = args.batch_limit_policy
-    config['dataset']['batch_limit'] = args.batch_limit
+    # config['dataset']['batch_limit'] = args.batch_limit
+    config['dataset']['batch_limit'] = get_batch_limit(args.dataset_name)
     config['dataset']['seed'] = config['reproduce']['seed'] = args.seed
     config['dataset']['use_selected'] = use_selected
     config['sample_num'] = sample_num_map[args.dataset_name]

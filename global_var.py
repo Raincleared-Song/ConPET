@@ -28,6 +28,18 @@ def get_epoch_map(big_model: bool):
         }
 
 
+def get_batch_limit(dataset_name: str):
+    return {
+        'fewnerd': 2500,
+        'ontonotes': 1250,
+        'bbn': 500,
+        'fewrel': 400,
+        'tacred': 100,
+        'ace': 100,
+        'chent': 1250,
+    }[dataset_name]
+
+
 def get_batch_size_map(big_model: bool):
     if big_model:
         return {

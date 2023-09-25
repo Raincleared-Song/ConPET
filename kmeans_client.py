@@ -30,6 +30,7 @@ def main():
     parser.add_argument('--start', type=int, help='start split', default=1)
     parser.add_argument('--cycle_suffix', type=str, help='the suffix of checkpoint path')
     parser.add_argument('--server_name', type=str, default='a100node4')
+    parser.add_argument('--local', action='store_true')
     parser.add_argument('--global_cp_path', type=str, default='')
     args = parser.parse_args()
 
@@ -51,35 +52,46 @@ def main():
         cur_split = f'p{idx}'
         exp_path = f'{args.dataset_name}_supervised_{exp_prefix}_fine_{total_parts}_bert_large_' \
                    f'lora4_mk00_{cur_split}{cycle_suffix}'
-        scp_cmd = ['scp', f'{args.server_name}:{disk_prefix}/'
-                          f'private/{global_cp_path}/{exp_path}/cache_flag', './']
-        print(' '.join(scp_cmd))
-        print('waiting for', exp_path)
-        while True:
+        if args.local:
+            print('waiting for', exp_path)
+            while True:
+                flag_path = f'checkpoints/{exp_path}/flag'
+                if os.path.exists(flag_path):
+                    print()
+                    break
+                time.sleep(300)
+        else:
+            scp_cmd = ['scp', f'{args.server_name}:{disk_prefix}/'
+                              f'private/{global_cp_path}/{exp_path}/cache_flag', './']
+            print(' '.join(scp_cmd))
+            print('waiting for', exp_path)
+            while True:
+                subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subp.wait()
+                if subp.returncode == 0:
+                    print()
+                    break
+                time.sleep(300)
+
+        if not args.local:
+            time.sleep(10)
+            db_path = 'songchenyang/continual_re_typer/databases'
+            scp_cmd = ['scp', '-r', f'{args.server_name}:{disk_prefix}/private/'
+                                    f'{db_path}/{args.dataset_name}{cycle_suffix}.db', './databases/']
+            print(' '.join(scp_cmd))
             subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             subp.wait()
-            if subp.returncode == 0:
-                print()
-                break
-            time.sleep(300)
-
-        time.sleep(10)
-        db_path = 'songchenyang/continual_re_typer/databases'
-        scp_cmd = ['scp', '-r', f'{args.server_name}:{disk_prefix}/private/'
-                                f'{db_path}/{args.dataset_name}{cycle_suffix}.db', './databases/']
-        print(' '.join(scp_cmd))
-        subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subp.wait()
-        assert subp.returncode == 0
+            assert subp.returncode == 0
         init_db(f'databases/{args.dataset_name}{cycle_suffix}.db')
 
         os.makedirs(f'checkpoints/{exp_path}', exist_ok=True)
-        scp_cmd = ['scp', '-r', f'{args.server_name}:{disk_prefix}/private/'
-                                f'{global_cp_path}/{exp_path}/ori_config.yaml', f'checkpoints/{exp_path}/']
-        print(' '.join(scp_cmd))
-        subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subp.wait()
-        assert subp.returncode == 0
+        if not args.local:
+            scp_cmd = ['scp', '-r', f'{args.server_name}:{disk_prefix}/private/'
+                                    f'{global_cp_path}/{exp_path}/ori_config.yaml', f'checkpoints/{exp_path}/']
+            print(' '.join(scp_cmd))
+            subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subp.wait()
+            assert subp.returncode == 0
 
         config_path = f'checkpoints/{exp_path}/ori_config.yaml'
         with open(config_path, encoding='utf-8') as fin:
@@ -111,6 +123,7 @@ def main():
                 logit_map[tag] = []
             logit = read_cache(f'p{idx}', sample_key, dtype=float_type)
             if logit is None:
+                print("Database entry error, please restart the program!\n")
                 from IPython import embed
                 embed()
                 exit()
@@ -152,12 +165,13 @@ def main():
         with open(save_path, 'w', encoding='utf-8') as fout:
             json.dump(selected_samples, fout)
 
-        scp_cmd = ['scp', save_path, f'{args.server_name}:{disk_prefix}/'
-                                     f'private/songchenyang/continual_re_typer/cache/']
-        print(' '.join(scp_cmd))
-        subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subp.wait()
-        assert subp.returncode == 0
+        if not args.local:
+            scp_cmd = ['scp', save_path, f'{args.server_name}:{disk_prefix}/'
+                                         f'private/songchenyang/continual_re_typer/cache/']
+            print(' '.join(scp_cmd))
+            subp = subprocess.Popen(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subp.wait()
+            assert subp.returncode == 0
         print('=' * 30)
 
 
